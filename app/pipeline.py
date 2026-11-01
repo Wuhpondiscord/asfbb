@@ -1,19 +1,27 @@
 import asyncio
 import json
+import re
 from urllib.parse import urlsplit
+
+def clean_output(data):
+    value = data.decode("utf-8", "replace") if isinstance(data, bytes) else str(data)
+    return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", value).replace("\r", "\n")
 
 async def execute(args, timeout):
     try:
         p = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     except FileNotFoundError:
-        return [], "unavailable"
+        return ["Binary missing"], "unavailable"
     try:
         out, err = await asyncio.wait_for(p.communicate(), timeout)
     except asyncio.TimeoutError:
         p.kill()
         await p.communicate()
-        return [], "timeout"
-    return out.decode("utf-8", "replace").splitlines()[:500], "completed" if p.returncode == 0 else "failed"
+        return ["Stage timed out"], "timeout"
+    lines = clean_output(out).splitlines()[:500]
+    if p.returncode:
+        lines += ["[stderr] " + x[:200] for x in clean_output(err).splitlines()[-8:]]
+    return lines, "completed" if p.returncode == 0 else "failed"
 
 def in_host(url, host):
     try:
