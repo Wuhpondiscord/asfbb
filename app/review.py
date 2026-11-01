@@ -26,6 +26,8 @@ def command(module, url, host):
     raise ValueError("Unsupported review module")
 
 async def review(module, url, host):
+    if module == "sqlmap" and not urlsplit(url).query:
+        return {"source": module, "status": "skipped", "target": url, "output": "", "reason": "URL has no query parameters"}
     args = command(module, url, host)
     lines, status = await execute(args, 40)
     return {"source": module, "status": status, "target": url,
