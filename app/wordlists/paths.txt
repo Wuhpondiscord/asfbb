@@ -1,0 +1,10 @@
+admin
+api
+assets
+config
+health
+login
+robots.txt
+sitemap.xml
+static
+status
