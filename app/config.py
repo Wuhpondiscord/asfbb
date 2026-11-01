@@ -31,3 +31,7 @@ HTTPX_BATCH_SIZE = 25
 # Stop retrying a consistently unavailable archive provider across many jobs.
 GAU_BREAKER_FAILURES = 4
 GAU_BREAKER_COOLDOWN_SECONDS = 900
+
+# Individual review deadlines, separate from the short generic process deadline.
+ARJUN_TIMEOUT_SECONDS = 85
+DALFOX_TIMEOUT_SECONDS = 65

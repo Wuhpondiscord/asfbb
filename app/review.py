@@ -1,5 +1,7 @@
 """Opt-in single-target verification stages. Output is evidence, not confirmed findings."""
 import json
+import tempfile
+from pathlib import Path
 import re
 from collections import Counter
 from urllib.parse import urlsplit
@@ -16,7 +18,8 @@ def command(module, url, host):
                 "-w", "/app/app/wordlists/paths.txt", "-t", "1", "-rate", "1",
                 "-maxtime", "25", "-timeout", "5", "-noninteractive", "-json"]
     if module == "arjun":
-        return ["/opt/asfb-venv/bin/arjun", "-u", url, "-t", "1"]
+        return ["/opt/asfb-venv/bin/arjun", "-u", url, "-t", "1",
+                "-T", "8", "--rate-limit", "2"]
     if module == "dalfox":
         return ["/usr/local/bin/dalfox", "scan", url, "--workers", "1",
                 "--timeout", "5", "--silence"]
@@ -52,11 +55,42 @@ def summarize_review(module, lines):
         return "\n".join(line for line in cleaned if line)[-2500:]
     return "\n".join(lines)[:5000]
 
+def read_arjun_results(path, host):
+    """Parse Arjun's JSON export without trusting URLs outside the exact host."""
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8")[:500000])
+    except (OSError, ValueError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    found = []
+    for candidate, data in payload.items():
+        if not in_host(candidate, host) or not isinstance(data, dict):
+            continue
+        method = str(data.get("method") or "GET").upper()
+        for entry in data.get("params", []):
+            name = entry.get("name") if isinstance(entry, dict) else entry
+            if isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_.$-]{1,100}", name):
+                found.append({"url": candidate, "method": method, "name": name,
+                              "source": "arjun"})
+    return found[:100]
+
+
 async def review(module, url, host):
     if module == "sqlmap" and not urlsplit(url).query:
         return {"source": module, "status": "skipped", "target": url, "output": "", "reason": "URL has no query parameters"}
     args = command(module, url, host)
-    lines, status = await execute(args, config.PROCESS_TIMEOUT_SECONDS)
+    parameters = []
+    if module == "arjun":
+        with tempfile.TemporaryDirectory(prefix="asfb-arjun-") as tmp:
+            export_path = str(Path(tmp) / "parameters.json")
+            lines, status = await execute(args + ["-oJ", export_path],
+                                          config.ARJUN_TIMEOUT_SECONDS)
+            parameters = read_arjun_results(export_path, host)
+    else:
+        timeout = (config.DALFOX_TIMEOUT_SECONDS if module == "dalfox"
+                   else config.PROCESS_TIMEOUT_SECONDS)
+        lines, status = await execute(args, timeout)
     has_evidence = module == "dalfox" and any("[POC]" in line for line in lines)
     if module == "dalfox" and status == "failed":
         # Dalfox documents code 1 for findings, code 2 for a scan error.
@@ -66,6 +100,7 @@ async def review(module, url, host):
         elif has_evidence:
             status = "partial"
     return {"source": module, "status": status, "target": url,
+            "parameters": parameters,
             "output": summarize_review(module, lines),
             "reason": (" | ".join(line[:180] for line in lines if line.startswith("[stderr]") or line.startswith("[diagnostic]")) or ("Dalfox returned a nonzero exit with unverified findings; runtime verification required" if has_evidence and status in ("partial", "findings") else (f"{module} returned an unsuccessful exit status; inspect captured output" if status == "failed" else "")))[:500],
             "note": "Unverified tool output. Confirm impact manually before reporting."}
