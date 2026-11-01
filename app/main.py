@@ -62,7 +62,7 @@ class Account(BaseModel):
 class PipelineOptions(BaseModel):
     endpoint_limit: int = Field(default=20, ge=1, le=100)
     httpx_limit: int = Field(default=3, ge=1, le=10)
-    katana_depth: int = Field(default=1, ge=1, le=2)
+    katana_depth: int = Field(default=1, ge=1, le=5)
     zap_endpoint_limit: int = Field(default=1, ge=1, le=10)
     request_budget: int = Field(default=20, ge=1, le=100)
     discovery_first: bool = True
