@@ -31,7 +31,10 @@ async def review(module, url, host):
         return {"source": module, "status": "skipped", "target": url, "output": "", "reason": "URL has no query parameters"}
     args = command(module, url, host)
     lines, status = await execute(args, config.PROCESS_TIMEOUT_SECONDS)
+    has_evidence = module == "dalfox" and any("[POC]" in line for line in lines)
+    if has_evidence and status == "failed":
+        status = "partial"
     return {"source": module, "status": status, "target": url,
             "output": "\n".join(lines)[:2500],
-            "reason": (" | ".join(line[:180] for line in lines if line.startswith("[stderr]") or line.startswith("[diagnostic]")) or (f"{module} returned an unsuccessful exit status; inspect captured output" if status == "failed" else ""))[:500],
+            "reason": (" | ".join(line[:180] for line in lines if line.startswith("[stderr]") or line.startswith("[diagnostic]")) or ("Dalfox returned a nonzero exit with unverified findings; runtime verification required" if has_evidence and status == "partial" else (f"{module} returned an unsuccessful exit status; inspect captured output" if status == "failed" else "")))[:500],
             "note": "Unverified tool output. Confirm impact manually before reporting."}
