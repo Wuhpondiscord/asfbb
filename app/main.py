@@ -315,18 +315,22 @@ async def worker():
                             headers["Cookie"] = profile["cookie"]
                     async with httpx.AsyncClient(timeout=15, follow_redirects=False,
                                                  trust_env=False, proxy=ZAP_URL, verify=False) as client:
-                        for i in range(spec.max_requests):
-                            if job["cancelled"]:
+                        for candidate in endpoints[:spec.options.zap_endpoint_limit]:
+                            if job["cancelled"] or job["request_count"] >= spec.options.request_budget:
                                 break
-                            public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
-                            try:
-                                response = await client.get(url, headers=headers)
-                                job["request_count"] += 1
-                                job["last_status"] = response.status_code
-                            except httpx.HTTPError as exc:
-                                job["error"] = "Target fetch failed: " + exc.__class__.__name__
-                                break
-                            if i + 1 < spec.max_requests:
+                            if not in_host(candidate, host):
+                                continue
+                            for i in range(spec.max_requests):
+                                if job["cancelled"] or job["request_count"] >= spec.options.request_budget:
+                                    break
+                                public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
+                                try:
+                                    response = await client.get(candidate, headers=headers)
+                                    job["request_count"] += 1
+                                    job["last_status"] = response.status_code
+                                except httpx.HTTPError as exc:
+                                    job["error"] = "Target fetch failed: " + exc.__class__.__name__
+                                    break
                                 await asyncio.sleep(spec.delay_seconds)
                     async with httpx.AsyncClient(timeout=20, trust_env=False) as z:
                         await asyncio.sleep(2)
