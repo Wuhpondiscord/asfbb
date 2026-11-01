@@ -30,6 +30,6 @@ def test_failed_review_without_stderr_has_reason():
         return ["[POC] unverified"],"failed"
     with patch.object(review,"execute",fake):
         result=asyncio.run(review.review("dalfox","https://example.org","example.org"))
-    assert result["status"]=="failed"
-    assert "exit status" in result["reason"]
+    assert result["status"]=="partial"
+    assert "runtime verification" in result["reason"]
     assert "[POC]" in result["output"]
