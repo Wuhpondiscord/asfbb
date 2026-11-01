@@ -133,7 +133,19 @@ async function loadScans(){try{
  const stat={completed:0,running:0,queued:0,failed:0,cancelled:0};
  for(const j of scanJobs)stat[j.status]=(stat[j.status]||0)+1;
  el('jobSummary').innerHTML=Object.entries(stat).map(([k,v])=>'<div><strong>'+v+'</strong><small>'+esc(k)+'</small></div>').join('');
- el('scans').innerHTML=scanJobs.slice().reverse().map(j=>'<details class="findrow"><summary><strong>'+esc(j.target)+'</strong> <span class="pill">'+esc(j.status)+'</span> <span class="subtle">'+(j.alerts||[]).length+' alerts · '+j.request_count+' requests</span></summary><div class="subtle">Job '+esc(j.id)+'</div>'+(j.error?'<p class="error">'+esc(j.error)+'</p>':'')+'<button class="secondary" onclick="switchTab(\'findings\')">View findings</button></details>').join('')||'<div class="empty">No scans yet.</div>';
+ el('scans').innerHTML=scanJobs.slice().reverse().map(j=>{
+ const endpoints=(j.endpoints||[]).map(u=>'<li>'+esc(u)+'</li>').join('');
+ const evidence=(j.reviews||[]).map(r=>'<details><summary>'+esc(r.source)+' · '+esc(r.status)+'</summary><pre class="results">'+esc(r.output||'No output returned')+'</pre><p class="muted">Unverified; manually review before reporting.</p></details>').join('');
+ const stages=Object.entries(j.pipeline||{}).map(([n,v])=>'<span class="pill">'+esc(n)+': '+esc(v)+'</span>').join(' ');
+ return '<details class="findrow"><summary><strong>'+esc(j.target)+'</strong> <span class="pill">'+esc(j.status)+'</span> <span class="subtle">'+(j.alerts||[]).length+' alerts · '+(j.endpoints||[]).length+' endpoints · '+j.request_count+' requests</span></summary>'+
+ '<div class="subtle">Job '+esc(j.id)+' · Stage '+esc(j.stage||j.status)+'</div>'+
+ '<progress max="100" value="'+Number(j.progress||0)+'" style="width:100%;margin:10px 0"></progress>'+
+ '<div class="controls">'+stages+'</div>'+
+ (j.error?'<p class="error">'+esc(j.error)+'</p>':'')+
+ (endpoints?'<details><summary>Discovered endpoints</summary><ul>'+endpoints+'</ul></details>':'')+
+ evidence+
+ '<button class="secondary" onclick="switchTab(\'findings\')">View findings</button></details>';
+ }).join('')||'<div class="empty">No scans yet.</div>';
  renderFindings();
  }catch(e){message('Could not load jobs: '+e.message,true)}}
 window.addEventListener('DOMContentLoaded',()=>{refresh();setInterval(()=>loadScans(),3000)});</script></body></html>
