@@ -63,7 +63,7 @@ class Account(BaseModel):
 
 class NucleiSettings(BaseModel):
     default_ids: list[str] = Field(
-        default_factory=lambda: list(nuclei_catalog.builtins()), max_length=20)
+        default_factory=lambda: list(config.NUCLEI_DEFAULT_IDS), max_length=20)
     community_paths: list[str] = Field(default_factory=list, max_length=config.NUCLEI_COMMUNITY_MAX)
     custom_templates: list[str] = Field(default_factory=list, max_length=config.NUCLEI_CUSTOM_MAX)
 
@@ -103,6 +103,18 @@ async def shutdown():
 @app.get("/")
 async def index():
     return FileResponse("/app/app/index.html")
+
+@app.get("/api/nuclei/defaults", dependencies=[Depends(authorize)])
+async def nuclei_template_defaults():
+    return {
+        "default_ids": list(config.NUCLEI_DEFAULT_IDS),
+        "templates": [{"id": name, "optional": name in config.NUCLEI_OPTIONAL_TEMPLATE_PATHS}
+                      for name in nuclei_catalog.builtins()],
+        "max_community": config.NUCLEI_COMMUNITY_MAX,
+        "max_custom": config.NUCLEI_CUSTOM_MAX,
+        "max_custom_bytes": config.NUCLEI_CUSTOM_MAX_BYTES,
+    }
+
 
 @app.get("/api/nuclei/templates", dependencies=[Depends(authorize)])
 async def search_nuclei_templates(q: str = "", page: int = 1):

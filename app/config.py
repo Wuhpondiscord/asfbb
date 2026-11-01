@@ -89,3 +89,5 @@ NUCLEI_OPTIONAL_TEMPLATE_PATHS = {
     "bounty-ultimate-medium": "/app/app/nuclei-templates/bounty-ultimate-medium.yaml",
     "bounty-ultimate-large": "/app/app/nuclei-templates/bounty-ultimate-large.yaml",
 }
+
+NUCLEI_DEFAULT_IDS = ("technology-headers", "hsts-missing", "csp-missing", "server-error-disclosure")

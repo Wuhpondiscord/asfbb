@@ -62,7 +62,7 @@ async def nuclei(url, host, agent, urls=None, default_ids=None,
     ))[:config.NUCLEI_TARGET_LIMIT]
     from .nuclei_catalog import builtins
     options = builtins()
-    selected_ids = list(options) if default_ids is None else default_ids
+    selected_ids = list(config.NUCLEI_DEFAULT_IDS) if default_ids is None else default_ids
     templates = [options[name] for name in selected_ids]
     blobs = dict(community_templates or {})
     for index, yaml_source in enumerate(custom_templates or []):
