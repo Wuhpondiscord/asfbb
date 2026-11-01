@@ -182,6 +182,12 @@ async def create_scan(spec: ScanRequest, request: Request):
         profile = accounts.get(spec.account_id)
         if not profile or profile["host"] != host or profile.get("owner") != request.state.sid:
             raise HTTPException(422, "Account profile not found or host mismatch")
+    for existing in jobs.values():
+        if (existing.get("owner") == request.state.sid
+                and existing.get("asset_id") == spec.asset_id
+                and existing.get("status") in ("queued", "running")
+                and existing.get("modules") == spec.modules):
+            return {"id": existing["id"], "status": existing["status"], "reused": True}
     identifier = uuid.uuid4().hex
     jobs[identifier] = {"owner": request.state.sid, "id": identifier, "asset_id": spec.asset_id, "target": url,
                         "status": "queued", "alerts": [], "error": None, "created": time.time(),
@@ -221,7 +227,8 @@ async def batch_scans(payload: BatchRequest, request: Request):
     for asset_id in payload.asset_ids:
         result.append(await create_scan(ScanRequest(asset_id=asset_id, policy_confirmed=True, user_agent=payload.user_agent,
                                                     delay_seconds=payload.delay_seconds, modules=payload.modules, options=payload.options, active_confirmed=payload.active_confirmed), request))
-    return {"queued": len(result), "scans": result}
+    return {"queued": sum(not item.get("reused", False) for item in result),
+            "reused": sum(bool(item.get("reused")) for item in result), "scans": result}
 
 class JWTInput(BaseModel):
     token: str = Field(min_length=10, max_length=16000)
