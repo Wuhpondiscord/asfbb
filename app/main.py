@@ -69,6 +69,7 @@ class ScanRequest(BaseModel):
     max_requests: int = Field(default=1, ge=1, le=10)
     delay_seconds: float = Field(default=1.5, ge=1, le=30)
     options: PipelineOptions = Field(default_factory=PipelineOptions)
+    active_confirmed: bool = False
     account_id: str | None = None
     modules: list[str] = Field(default_factory=lambda: ["zap-passive"])
 
@@ -152,8 +153,13 @@ def remove_account(account_id: str, request: Request):
 
 @app.post("/api/scans", dependencies=[Depends(authorize)])
 async def create_scan(spec: ScanRequest, request: Request):
-    if not spec.modules or len(spec.modules) != len(set(spec.modules)) or not set(spec.modules).issubset({"zap-passive","katana","nuclei","gau","httpx"}):
+    if not spec.modules or len(spec.modules) != len(set(spec.modules)) or not set(spec.modules).issubset(({"zap-passive","katana","nuclei","gau","httpx"} | ACTIVE_MODULES)):
         raise HTTPException(422, "Only passive scanning is currently supported")
+    if ACTIVE_MODULES.intersection(spec.modules):
+        if not spec.active_confirmed:
+            raise HTTPException(422, "Explicit permission for active single-target tests is required")
+        if spec.account_id:
+            raise HTTPException(422, "Active review stages do not use account profiles")
     if queue.qsize() >= 1000:
         raise HTTPException(429, "Scan queue full")
     if not spec.policy_confirmed:
@@ -173,7 +179,7 @@ async def create_scan(spec: ScanRequest, request: Request):
     identifier = uuid.uuid4().hex
     jobs[identifier] = {"owner": request.state.sid, "id": identifier, "asset_id": spec.asset_id, "target": url,
                         "status": "queued", "alerts": [], "error": None, "created": time.time(),
-                        "request_count": 0, "cancelled": False, "modules": spec.modules, "endpoints": [], "pipeline": {}, "probes": [], "options": spec.options.model_dump(), "progress": 0, "stage": "queued"}
+                        "request_count": 0, "cancelled": False, "modules": spec.modules, "endpoints": [], "pipeline": {}, "reviews": [], "probes": [], "options": spec.options.model_dump(), "progress": 0, "stage": "queued"}
     # Public scan results are ephemeral.
     await queue.put((identifier, spec))
     return {"id": identifier, "status": "queued"}
@@ -188,6 +194,8 @@ class BatchRequest(BaseModel):
 
 @app.post("/api/scans/batch", dependencies=[Depends(authorize)])
 async def batch_scans(payload: BatchRequest, request: Request):
+    if ACTIVE_MODULES.intersection(payload.modules):
+        raise HTTPException(422, "Active review modules cannot run in bulk jobs")
     if not payload.policy_confirmed:
         raise HTTPException(422, "Program policy confirmation is required")
     if len(set(payload.asset_ids)) != len(payload.asset_ids) or queue.qsize() + len(payload.asset_ids) > 1000:
@@ -333,6 +341,9 @@ async def worker():
                 elif module == "nuclei":
                     result = await nuclei(url, host, spec.user_agent)
                     job["alerts"].extend(result["alerts"])
+                elif module in ACTIVE_MODULES:
+                    result = await review(module, url, host)
+                    job["reviews"].append(result)
                 job["pipeline"][module] = result["status"]
                 job["endpoint_sources"] = {key: sorted(set(value)) for key, value in endpoint_sources.items() if key in endpoints}
                 job["progress"] = round((position + 1) * 100 / len(spec.modules))
