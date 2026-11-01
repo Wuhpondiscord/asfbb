@@ -16,7 +16,7 @@ _cache = {"expires": 0.0, "sha": "", "paths": set(), "templates": {}}
 
 
 def builtins():
-    return {Path(p).stem: p for p in config.NUCLEI_TEMPLATE_PATHS}
+    return {**{Path(p).stem: p for p in config.NUCLEI_TEMPLATE_PATHS},\n            **config.NUCLEI_OPTIONAL_TEMPLATE_PATHS}
 
 
 def validate_template(content):

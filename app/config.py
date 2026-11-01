@@ -82,3 +82,10 @@ NUCLEI_CUSTOM_MAX = 3
 NUCLEI_CUSTOM_MAX_BYTES = 20000
 NUCLEI_MAX_REQUESTS_PER_TEMPLATE = 2
 NUCLEI_CATALOG_PAGE_SIZE = 30
+
+# Optional curated profiles (not enabled unless explicitly selected).
+NUCLEI_OPTIONAL_TEMPLATE_PATHS = {
+    "bounty-ultimate-lite": "/app/app/nuclei-templates/bounty-ultimate-lite.yaml",
+    "bounty-ultimate-medium": "/app/app/nuclei-templates/bounty-ultimate-medium.yaml",
+    "bounty-ultimate-large": "/app/app/nuclei-templates/bounty-ultimate-large.yaml",
+}

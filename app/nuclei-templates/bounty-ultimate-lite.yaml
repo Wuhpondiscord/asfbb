@@ -1,0 +1,86 @@
+id: bounty-ultimate-lite
+info:
+  name: Bounty Ultimate - Lite
+  author: asfb
+  severity: info
+  description: Conservative GET-only signals; possible exposure, not confirmed impact.
+  tags: bounty,recon,exposure,misconfig
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/.git/config"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: body
+        words:
+          - 'repositoryformatversion'
+
+  - method: GET
+    path:
+      - "{{BaseURL}}/.git/HEAD"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: body
+        words:
+          - 'ref: refs/heads/'
+
+  - method: GET
+    path:
+      - "{{BaseURL}}/swagger.json"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: body
+        words:
+          - 'swagger'
+
+  - method: GET
+    path:
+      - "{{BaseURL}}/openapi.json"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: body
+        words:
+          - 'openapi'
+
+  - method: GET
+    path:
+      - "{{BaseURL}}/phpinfo.php"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: body
+        words:
+          - 'PHP Version'
+
+  - method: GET
+    path:
+      - "{{BaseURL}}/actuator/health"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: body
+        words:
+          - 'status'
