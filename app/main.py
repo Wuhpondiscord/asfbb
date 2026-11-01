@@ -12,6 +12,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .scope import LEVELS, parse_csv, public_host, target_url
+from . import storage
+from .jwtcheck import inspect_jwt
 
 API_KEY = os.environ.get("ASFB_API_KEY", "")
 ZAP_KEY = os.environ.get("ZAP_API_KEY", "")
@@ -40,11 +42,16 @@ class ScanRequest(BaseModel):
     max_requests: int = Field(default=1, ge=1, le=10)
     delay_seconds: float = Field(default=1.5, ge=1, le=30)
     account_id: str | None = None
+    modules: list[str] = Field(default_factory=lambda: ["zap-passive"])
 
 @app.on_event("startup")
 async def startup():
     if not API_KEY or not ZAP_KEY:
         raise RuntimeError("ASFB_API_KEY and ZAP_API_KEY are mandatory")
+    assets.update(storage.load("assets"))
+    jobs.update(storage.load("jobs"))
+    for job in jobs.values():
+        if job["status"] in ("queued", "running"): job["status"] = "interrupted"
     app.state.worker = asyncio.create_task(worker())
 
 @app.on_event("shutdown")
@@ -70,6 +77,7 @@ async def import_file(file: UploadFile = File(...)):
     for r in rows:
         r["id"] = prefix + "-" + r["id"]
         assets[r["id"]] = r
+    storage.save("assets", assets)
     return {"imported": len(rows), "web": sum(r["compatibility"] == "web" for r in rows)}
 
 @app.get("/api/assets", dependencies=[Depends(authorize)])
@@ -113,6 +121,10 @@ def remove_account(account_id: str):
 
 @app.post("/api/scans", dependencies=[Depends(authorize)])
 async def create_scan(spec: ScanRequest):
+    if spec.modules != ["zap-passive"]:
+        raise HTTPException(422, "Only passive scanning is currently supported")
+    if queue.qsize() >= 100:
+        raise HTTPException(429, "Scan queue full")
     if not spec.policy_confirmed:
         raise HTTPException(422, "You must explicitly confirm program automation policy")
     item = assets.get(spec.asset_id)
@@ -131,8 +143,46 @@ async def create_scan(spec: ScanRequest):
     jobs[identifier] = {"id": identifier, "asset_id": spec.asset_id, "target": url,
                         "status": "queued", "alerts": [], "error": None, "created": time.time(),
                         "request_count": 0, "cancelled": False}
+    storage.save("jobs", {identifier: jobs[identifier]})
     await queue.put((identifier, spec))
     return {"id": identifier, "status": "queued"}
+
+class BatchRequest(BaseModel):
+    asset_ids: list[str] = Field(min_length=1, max_length=40)
+    policy_confirmed: bool = False
+    user_agent: str = Field(default="ASFB-Research/0.1", max_length=300)
+    delay_seconds: float = Field(default=1.5, ge=1, le=30)
+
+@app.post("/api/scans/batch", dependencies=[Depends(authorize)])
+async def batch_scans(payload: BatchRequest):
+    if not payload.policy_confirmed:
+        raise HTTPException(422, "Program policy confirmation is required")
+    if len(set(payload.asset_ids)) != len(payload.asset_ids) or queue.qsize() + len(payload.asset_ids) > 100:
+        raise HTTPException(422, "Duplicate assets or queue capacity exceeded")
+    for asset_id in payload.asset_ids:
+        item = assets.get(asset_id)
+        if item is None:
+            raise HTTPException(404, f"Asset not found: {asset_id}")
+        try:
+            _, host = target_url(item)
+            public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+    result = []
+    for asset_id in payload.asset_ids:
+        result.append(await create_scan(ScanRequest(asset_id=asset_id, policy_confirmed=True, user_agent=payload.user_agent,
+                                                    delay_seconds=payload.delay_seconds)))
+    return {"queued": len(result), "scans": result}
+
+class JWTInput(BaseModel):
+    token: str = Field(min_length=10, max_length=16000)
+
+@app.post("/api/tools/jwt/inspect", dependencies=[Depends(authorize)])
+def jwt_inspect(payload: JWTInput):
+    try:
+        return inspect_jwt(payload.token)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
 
 @app.get("/api/scans", dependencies=[Depends(authorize)])
 def scan_list():
@@ -149,6 +199,7 @@ def cancel_scan(scan_id: str):
     if scan_id not in jobs:
         raise HTTPException(404, "Scan not found")
     jobs[scan_id]["cancelled"] = True
+    storage.save("jobs", {scan_id: jobs[scan_id]})
     return {"cancel_requested": True}
 
 async def zap_call(client, component, action, params=None):
@@ -211,4 +262,5 @@ async def worker():
             job["error"] = str(exc)[:250]
         finally:
             # Never retain authenticated headers in logs or job history.
+            storage.save("jobs", {identifier: job})
             queue.task_done()

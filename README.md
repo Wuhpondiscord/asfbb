@@ -81,3 +81,13 @@ python -m pytest -q
 
 ## Next milestones
 OpenAPI discovery, per-program policy manifests, scoped crawling, differential two-account IDOR replay, verified JWT rule pack, vulnerability triage, persistence and scan-history diffing.
+
+## v0.2 — additional features
+- **Batch queue**: `POST /api/scans/batch` (up to 40 individually scoped web assets per request). Jobs remain sequential and require manual confirmation of program policy.
+- **Persistence**: non-secret imported assets and job status/alerts are stored in SQLite (`ASFB_DB_PATH`, default `/app/data/asfb.sqlite3`). Attach persistent storage if desired. Account cookies are never saved.
+- **Offline JWT review**: `POST /api/tools/jwt/inspect` accepts a token and returns only header/claim field names plus heuristic warnings; it does not verify signature validity or access tokens to any server.
+- **Automatic Hugging Face deployment**: GitHub Action deploys `main` when `HF_TOKEN` is a GitHub **Actions secret** and `HF_SPACE_REPO` is a GitHub **Actions variable** (e.g. `owner/space`). The `GH_Token` secret in Hugging Face is not required and should not be used for raw credential logs.
+
+**Public Space**: The landing page can be viewed without authentication. Operator actions retain `ASFB_API_KEY`: removing access control from an internet-exposed scanner would allow strangers to control scans and read your account profiles. The internal `ZAP_API_KEY` remains necessary.
+
+Still pending: cross-account IDOR testing, live JWT signature bypass testing, authenticated browser crawling, Nuclei integration, program-policy extraction, and full isolation for a public multiuser service.
