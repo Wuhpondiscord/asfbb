@@ -124,7 +124,7 @@ async def review(module, url, host):
     if not reason and status == "failed":
         reason = f"{module} exited unsuccessfully; inspect its output"
     if not reason and status == "partial" and has_evidence:
-        reason = "Unverified findings were returned, but the tool did not finish cleanly"
+        reason = "Unverified findings were returned; runtime verification required. The tool did not finish cleanly"
     return {"source": module, "status": status, "target": url,
             "exit_code": exit_code,
             "parameters": parameters,
