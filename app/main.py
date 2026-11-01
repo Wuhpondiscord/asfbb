@@ -15,7 +15,7 @@ from .scope import LEVELS, parse_csv, public_host, target_url
 from . import storage
 from .jwtcheck import inspect_jwt
 from .pipeline import katana, nuclei, gau, probe, in_host
-from .review import ACTIVE_MODULES, review
+from .review import ACTIVE_MODULES, review, choose_arjun_target
 from . import config
 
 
@@ -432,8 +432,12 @@ async def run_scan_job(identifier, spec):
                     result = await nuclei(url, host, spec.user_agent, endpoints)
                     job["alerts"].extend(result["alerts"])
                 elif module in ACTIVE_MODULES:
-                    result = await review(module, url, host)
+                    review_url = (choose_arjun_target(url, endpoints, host)
+                                  if module == "arjun" else url)
+                    result = await review(module, review_url, host)
                     job["reviews"].append(result)
+                    if module == "dalfox":
+                        job["alerts"].extend(result.get("findings", []))
                     if module == "ffuf":
                         discovered_urls = [
                             candidate for candidate in result.get("endpoints", [])
@@ -465,7 +469,11 @@ async def run_scan_job(identifier, spec):
                            "; matches: " + str(len(result.get("alerts", []))))
             if module == "arjun":
                 summary = (str(len(result.get("parameters", []))) +
-                           " structured parameters. " + summary)
+                           " structured parameters. Target: " + str(result.get("target", url)) +
+                           ". " + summary)
+            if module == "dalfox":
+                summary = (str(len(result.get("findings", []))) +
+                           " unverified Dalfox findings; " + summary)
             if module == "zap-passive":
                 summary = ("ZAP-proxied requests: " + str(job["request_count"]) +
                            "; alerts: " + str(len(job["alerts"])) +
