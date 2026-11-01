@@ -163,7 +163,7 @@ function nucleiOptions(){
  const community_paths=Array.from(nucleiCommunityPaths);
  const custom_templates=el('nucleiCustom').value.split(/^---\s*$/m).map(s=>s.trim()).filter(Boolean);
  if(community_paths.length>8||custom_templates.length>3)throw Error('Select at most 8 community templates and 3 custom templates.');
- if(!default_ids.length&&!community_paths.length&&!custom_templates.length)throw Error('Select at least one Nuclei template.');
+ if(el('modNuclei').checked&&!default_ids.length&&!community_paths.length&&!custom_templates.length)throw Error('Select at least one Nuclei template.');
  if(custom_templates.some(t=>t.length>20000))throw Error('Custom YAML template exceeds 20 KB.');
  return {default_ids,community_paths,custom_templates};
 }
