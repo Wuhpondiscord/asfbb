@@ -15,6 +15,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Validate dashboard JavaScript syntax
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          page = Path("app/index.html").read_text()
+          assert "<script>" in page and "</script>" in page
+          js = page.split("<script>", 1)[1].split("</script>", 1)[0]
+          Path("/tmp/asfb-inline.js").write_text(js)
+          PY
+          node --check /tmp/asfb-inline.js
       - name: Validate Hugging Face token
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
