@@ -100,18 +100,17 @@ async def catalog(query="", page=1):
                          "User-Agent": "ASFB-template-browser"})
             resp.raise_for_status()
             payload = resp.json()
-        # Git's tree SHA is not a raw.githubusercontent.com commit ref. Pin the
-        # download to the branch's commit SHA so selected paths resolve.
-        commit_sha = "main"
-        try:
-            ref_response = await client.get(
-                f"https://api.github.com/repos/{SOURCE_REPO}/git/ref/heads/main",
-                headers={"Accept": "application/vnd.github+json",
-                         "User-Agent": "ASFB-template-browser"})
-            ref_response.raise_for_status()
-            commit_sha = ref_response.json()["object"]["sha"]
-        except (httpx.HTTPError, KeyError, TypeError):
-            pass
+            # Git tree hashes do not resolve as raw GitHub source references.
+            commit_sha = "main"
+            try:
+                ref_response = await client.get(
+                    f"https://api.github.com/repos/{SOURCE_REPO}/git/ref/heads/main",
+                    headers={"Accept": "application/vnd.github+json",
+                             "User-Agent": "ASFB-template-browser"})
+                ref_response.raise_for_status()
+                commit_sha = ref_response.json()["object"]["sha"]
+            except (httpx.HTTPError, KeyError, TypeError):
+                pass
         paths = {x["path"] for x in payload.get("tree", [])
                  if x.get("type") == "blob" and isinstance(x.get("path"), str)
                  and REPO_PATH.fullmatch(x["path"])}
