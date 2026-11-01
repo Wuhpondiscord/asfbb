@@ -16,6 +16,7 @@ from . import storage
 from .jwtcheck import inspect_jwt
 from .pipeline import katana, nuclei, gau, probe, in_host
 from .review import ACTIVE_MODULES, review
+from . import config
 
 
 ZAP_KEY = os.environ.get("ZAP_API_KEY", "")
@@ -60,11 +61,11 @@ class Account(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
 
 class PipelineOptions(BaseModel):
-    endpoint_limit: int = Field(default=100, ge=1, le=2000)
-    httpx_limit: int = Field(default=10, ge=1, le=100)
-    katana_depth: int = Field(default=1, ge=1, le=5)
-    zap_endpoint_limit: int = Field(default=5, ge=1, le=100)
-    request_budget: int = Field(default=100, ge=1, le=2000)
+    endpoint_limit: int = Field(default=config.ENDPOINT_LIMIT_DEFAULT, ge=1, le=config.ENDPOINT_LIMIT_MAX)
+    httpx_limit: int = Field(default=config.HTTPX_LIMIT_DEFAULT, ge=1, le=config.HTTPX_LIMIT_MAX)
+    katana_depth: int = Field(default=config.KATANA_DEPTH_DEFAULT, ge=1, le=config.KATANA_DEPTH_MAX)
+    zap_endpoint_limit: int = Field(default=config.ZAP_ENDPOINT_LIMIT_DEFAULT, ge=1, le=config.ZAP_ENDPOINT_LIMIT_MAX)
+    request_budget: int = Field(default=config.ZAP_REQUEST_BUDGET_DEFAULT, ge=1, le=config.ZAP_REQUEST_BUDGET_MAX)
     discovery_first: bool = True
 
 class ScanRequest(BaseModel):
@@ -72,7 +73,7 @@ class ScanRequest(BaseModel):
     policy_confirmed: bool = False
     user_agent: str = Field(default="ASFB-Research/0.1", max_length=300)
     max_requests: int = Field(default=1, ge=1, le=10)
-    delay_seconds: float = Field(default=1.5, ge=1, le=30)
+    delay_seconds: float = Field(default=config.REQUEST_DELAY_DEFAULT, ge=config.REQUEST_DELAY_MIN, le=config.REQUEST_DELAY_MAX)
     options: PipelineOptions = Field(default_factory=PipelineOptions)
     active_confirmed: bool = False
     account_id: str | None = None
@@ -194,15 +195,15 @@ class BatchRequest(BaseModel):
     asset_ids: list[str] = Field(min_length=1, max_length=1000)
     policy_confirmed: bool = False
     user_agent: str = Field(default="ASFB-Research/0.1", max_length=300)
-    delay_seconds: float = Field(default=1.5, ge=1, le=30)
+    delay_seconds: float = Field(default=config.REQUEST_DELAY_DEFAULT, ge=config.REQUEST_DELAY_MIN, le=config.REQUEST_DELAY_MAX)
     modules: list[str] = Field(default_factory=lambda: ["zap-passive"])
     options: PipelineOptions = Field(default_factory=PipelineOptions)
     active_confirmed: bool = False
 
 @app.post("/api/scans/batch", dependencies=[Depends(authorize)])
 async def batch_scans(payload: BatchRequest, request: Request):
-    if ACTIVE_MODULES.intersection(payload.modules) and (len(payload.asset_ids) > 30 or not payload.active_confirmed):
-        raise HTTPException(422, "Active review requires authorization and at most 30 targets")
+    if ACTIVE_MODULES.intersection(payload.modules) and (len(payload.asset_ids) > config.ACTIVE_BATCH_LIMIT or not payload.active_confirmed):
+        raise HTTPException(422, "Active review requires authorization and at most 100 targets")
     if not payload.policy_confirmed:
         raise HTTPException(422, "Program policy confirmation is required")
     if len(set(payload.asset_ids)) != len(payload.asset_ids) or queue.qsize() + len(payload.asset_ids) > 1000:
