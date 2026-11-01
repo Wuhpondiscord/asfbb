@@ -1,4 +1,4 @@
-name: Deploy to Hugging Face
+name: Deploy to Hugging Face Space
 on:
   push:
     branches: [main]
@@ -13,14 +13,19 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - name: Push to Space
+      - name: Validate Hugging Face token
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_SPACE_REPO: ${{ vars.HF_SPACE_REPO }}
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "::error::GitHub Actions secret HF_TOKEN is missing"
+            exit 1
+          fi
+      - name: Push source to wuhp/bbscanner
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -eu
-          test -n "$HF_TOKEN"
-          test -n "$HF_SPACE_REPO"
-          case "$HF_SPACE_REPO" in */*) ;; *) exit 1;; esac
-          git remote add hf "https://oauth2:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE_REPO}"
-          git push --force hf HEAD:main
+          # Authentication is supplied through a temporary HTTP header, not embedded in the remote URL.
+          BASIC_AUTH="$(printf 'oauth2:%s' "$HF_TOKEN" | base64 -w0)"
+          git -c http.extraheader="AUTHORIZATION: Basic $BASIC_AUTH" push --force             https://huggingface.co/spaces/wuhp/bbscanner HEAD:main
