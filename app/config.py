@@ -44,3 +44,9 @@ ZAP_PASSIVE_POLL_SECONDS = 0.5
 GAU_PROVIDER = "wayback"
 
 PROCESS_OUTPUT_MAX_LINES = 5000
+
+# GAU: fallback providers are queried when Wayback has no successful URL response.
+GAU_FALLBACK_PROVIDERS = ("otx", "commoncrawl")
+GAU_PROVIDER_DEADLINE_SECONDS = 12
+GAU_HTTP_TIMEOUT_SECONDS = 8
+GAU_AGGREGATE_ALL_PROVIDERS = False

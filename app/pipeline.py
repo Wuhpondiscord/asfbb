@@ -78,22 +78,58 @@ _gau_failures = 0
 _gau_disabled_until = 0.0
 
 async def gau(url, host, limit=None):
+    """Query isolated archive providers and report partial provider coverage."""
     global _gau_failures, _gau_disabled_until
-    if time.monotonic() < _gau_disabled_until:
-        return {"status": "unavailable", "endpoints": [],
-                "reason": "Wayback archive requests repeatedly timed out; provider temporarily disabled for this process"}
-    rows, status = await execute(["/usr/local/bin/gau", "--threads", "1", "--timeout", "8",
-        "--retries", "0", "--providers", config.GAU_PROVIDER, host], config.GAU_TIMEOUT_SECONDS)
-    if status == "timeout":
-        _gau_failures += 1
-        if _gau_failures >= config.GAU_BREAKER_FAILURES:
-            _gau_disabled_until = time.monotonic() + config.GAU_BREAKER_COOLDOWN_SECONDS
-            _gau_failures = 0
+    maximum = max(1, min(int(limit or config.ENDPOINT_LIMIT_DEFAULT), config.ENDPOINT_LIMIT_MAX))
+    providers = (config.GAU_PROVIDER,) + tuple(config.GAU_FALLBACK_PROVIDERS)
+    collected = []
+    provider_results = []
+    now = time.monotonic()
+    for provider in dict.fromkeys(providers):
+        if provider == config.GAU_PROVIDER and now < _gau_disabled_until:
+            provider_results.append({"provider": provider, "status": "unavailable",
+                                     "reason": "Circuit breaker cooldown"})
+            continue
+        args = ["/usr/local/bin/gau", "--threads", "1",
+                "--timeout", str(config.GAU_HTTP_TIMEOUT_SECONDS),
+                "--retries", "0", "--providers", provider, host]
+        rows, status = await execute(args, config.GAU_PROVIDER_DEADLINE_SECONDS)
+        urls = [value.strip() for value in rows
+                if isinstance(value, str) and in_host(value.strip(), host)]
+        collected.extend(urls)
+        diagnostics = " | ".join(value[:180] for value in rows
+                                 if value.startswith(("[stderr]", "[diagnostic]")))
+        provider_results.append({"provider": provider, "status": status,
+                                 "urls": len(urls), "reason": diagnostics[:300]})
+        if provider == config.GAU_PROVIDER:
+            if status in ("timeout", "failed", "unavailable"):
+                _gau_failures += 1
+                if _gau_failures >= config.GAU_BREAKER_FAILURES:
+                    _gau_disabled_until = time.monotonic() + config.GAU_BREAKER_COOLDOWN_SECONDS
+                    _gau_failures = 0
+            else:
+                _gau_failures = 0
+                _gau_disabled_until = 0.0
+        if status == "completed" and urls and not config.GAU_AGGREGATE_ALL_PROVIDERS:
+            break
+    unique = list(dict.fromkeys(collected))[:maximum]
+    statuses = [item["status"] for item in provider_results]
+    if statuses and all(s == "completed" for s in statuses):
+        final_status = "completed"
+    elif unique or any(s == "completed" for s in statuses):
+        final_status = "partial"
+    elif "timeout" in statuses:
+        final_status = "timeout"
+    elif "failed" in statuses:
+        final_status = "failed"
     else:
-        _gau_failures = 0
-        _gau_disabled_until = 0.0
-    return {"status": status, "endpoints": list(dict.fromkeys(
-        value.strip() for value in rows if in_host(value.strip(), host)))[:max(1, min(int(limit or config.ENDPOINT_LIMIT_DEFAULT), config.ENDPOINT_LIMIT_MAX))], "reason": " | ".join(x for x in rows if x.startswith("[diagnostic]") or x.startswith("[stderr]"))[:350]}
+        final_status = "unavailable"
+    problems = [f'{item["provider"]}: {item["status"]}' +
+                (f' ({item.get("reason")})' if item.get("reason") else "")
+                for item in provider_results if item["status"] != "completed"]
+    return {"status": final_status, "endpoints": unique, "providers": provider_results,
+            "reason": " | ".join(problems)[:500],
+            "summary": f"Archive sources: {len(provider_results)}; scoped URLs: {len(unique)}"}
 
 async def probe(urls, host, agent, limit=1):
     """Probe exact-host URLs in bounded batches, avoiding one subprocess per URL."""
