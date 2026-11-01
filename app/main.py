@@ -478,9 +478,7 @@ async def run_scan_job(identifier, spec):
                         raise ValueError("Nuclei template download failed: " + str(exc)[:160])
                     result = await nuclei(
                         url, host, spec.user_agent, endpoints,
-                        default_ids=selection.default_ids,
-                        community_templates=remote,
-                        custom_templates=selection.custom_templates)
+                        selection.default_ids, remote, selection.custom_templates)
                     job["alerts"].extend(result["alerts"])
                 elif module in ACTIVE_MODULES:
                     review_url = (choose_arjun_target(url, endpoints, host)
