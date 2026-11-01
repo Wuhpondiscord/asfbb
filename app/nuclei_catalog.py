@@ -75,11 +75,30 @@ def validate_template(content):
     return data["id"]
 
 
+def estimate_requests(yaml_content):
+    """Estimate one Nuclei pass from the number of HTTP paths declared."""
+    document = yaml.safe_load(yaml_content)
+    if not isinstance(document, dict):
+        raise ValueError("Invalid template document")
+    requests = document.get("http", [])
+    if not isinstance(requests, list):
+        raise ValueError("Template HTTP requests must be a list")
+    return sum(max(1, len(r.get("path", []))) for r in requests if isinstance(r, dict))
+
+
+def bundled_content(identifier):
+    path = builtins()[identifier]
+    resolved = Path(path)
+    if not resolved.is_file():
+        resolved = Path(__file__).parent / "nuclei-templates" / Path(path).name
+    return resolved.read_text(encoding="utf-8")
+
+
 def validate_selection(default_ids, community_paths, custom_templates):
     allowed = builtins()
-    if len(default_ids) > len(allowed) or any(x not in allowed for x in default_ids):
+    if len(default_ids) != len(set(default_ids)) or len(default_ids) > len(allowed) or any(x not in allowed for x in default_ids):
         raise ValueError("Unknown bundled template")
-    if len(community_paths) > config.NUCLEI_COMMUNITY_MAX or any(
+    if len(community_paths) != len(set(community_paths)) or len(community_paths) > config.NUCLEI_COMMUNITY_MAX or any(
             not REPO_PATH.fullmatch(x) for x in community_paths):
         raise ValueError("Community selections must be HTTP template paths in nuclei-templates")
     if len(custom_templates) > config.NUCLEI_CUSTOM_MAX:

@@ -138,6 +138,35 @@ async def check_nuclei_community_templates(payload: NucleiTemplateCheckRequest):
     return {"compatible": compatible, "rejected": rejected}
 
 
+@app.post("/api/nuclei/validate", dependencies=[Depends(authorize)])
+async def validate_nuclei_configuration(selection: NucleiSettings):
+    """Preflight only: no scan traffic is sent to selected target hosts."""
+    try:
+        nuclei_catalog.validate_selection(
+            selection.default_ids, selection.community_paths, selection.custom_templates)
+        community = await nuclei_catalog.community_files(selection.community_paths)
+        bundles = [(label, nuclei_catalog.bundled_content(label)) for label in selection.default_ids]
+        sources = bundles + list(community.items()) + [
+            (f"custom-{i+1}", content) for i, content in enumerate(selection.custom_templates)]
+        if not sources:
+            raise ValueError("Choose at least one Nuclei template")
+        breakdown = [{"name": label, "estimated_requests_per_target":
+                      nuclei_catalog.estimate_requests(content)} for label, content in sources]
+        total = sum(x["estimated_requests_per_target"] for x in breakdown)
+        permitted = total <= config.NUCLEI_MAX_REQUEST_BUDGET
+        return {"valid": permitted, "per_target_requests": total,
+                "max_job_requests": config.NUCLEI_MAX_REQUEST_BUDGET,
+                "max_targets_within_budget": (
+                    config.NUCLEI_MAX_REQUEST_BUDGET // total if permitted else 0),
+                "templates": breakdown,
+                "message": ("Configuration valid" if permitted
+                            else "Selected templates exceed the request budget for even one target; remove templates")}
+    except (ValueError, KeyError, OSError) as exc:
+        raise HTTPException(422, str(exc)[:240])
+    except httpx.HTTPError as exc:
+        raise HTTPException(503, "Community template retrieval failed: " + str(exc)[:140])
+
+
 @app.get("/api/nuclei/templates", dependencies=[Depends(authorize)])
 async def search_nuclei_templates(q: str = "", page: int = 1):
     try:

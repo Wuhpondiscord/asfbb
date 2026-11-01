@@ -98,7 +98,15 @@ async def nuclei(url, host, agent, urls=None, default_ids=None,
         estimated_per_url = max(1, estimated_per_url)
         # Keep the request volume bounded even if the user selects broad presets
         # and multiple community/custom templates together.
-        max_targets = max(1, config.NUCLEI_MAX_REQUEST_BUDGET // estimated_per_url)
+        if estimated_per_url > config.NUCLEI_MAX_REQUEST_BUDGET:
+            return {"status": "failed", "alerts": [], "templates": list(selected_ids) + list(blobs),
+                    "targets_checked": 0,
+                    "reason": (f"Nuclei selected templates require approximately {estimated_per_url} "
+                               f"requests per target, above the configured job budget of "
+                               f"{config.NUCLEI_MAX_REQUEST_BUDGET}. Reduce template selections."),
+                    "estimated_per_target": estimated_per_url,
+                    "max_job_requests": config.NUCLEI_MAX_REQUEST_BUDGET}
+        max_targets = config.NUCLEI_MAX_REQUEST_BUDGET // estimated_per_url
         requested_targets = len(targets)
         targets = targets[:max_targets]
         with open(target_file, "w", encoding="utf-8") as handle:
