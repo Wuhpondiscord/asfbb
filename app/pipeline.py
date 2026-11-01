@@ -55,17 +55,22 @@ async def gau(url, host):
     return {"status": status, "endpoints": list(dict.fromkeys(
         value.strip() for value in rows if in_host(value.strip(), host)))[:100]}
 
-async def probe(urls, host, agent):
+async def probe(urls, host, agent, limit=1):
     # Header-only non-intrusive metadata probe. URLs are limited to the selected host.
-    targets = list(dict.fromkeys(u for u in urls if in_host(u, host)))[:10]
+    targets = list(dict.fromkeys(u for u in urls if in_host(u, host)))[:max(1, min(int(limit), 10))]
     if not targets:
         return {"status": "completed", "probes": []}
-    args = ["/usr/local/bin/pd-httpx", "-u", targets[0], "-json", "-silent",
+    all_rows = []
+    status = "completed"
+    for target in targets:
+        args = ["/usr/local/bin/pd-httpx", "-u", target, "-json", "-silent",
             "-rl", "1", "-threads", "1", "-timeout", "8", "-retries", "0",
             "-H", "User-Agent: " + agent, "-no-color"]
-    rows, status = await execute(args, 30)
+        rows, stage_status = await execute(args, 30)
+        all_rows.extend(rows)
+        if stage_status != "completed": status = stage_status
     probes = []
-    for line in rows:
+    for line in all_rows:
         try:
             item = json.loads(line)
             found = item.get("url", "")
