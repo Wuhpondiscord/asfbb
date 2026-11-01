@@ -371,9 +371,18 @@ async def worker():
                     result = await review(module, url, host)
                     job["reviews"].append(result)
                 job["pipeline"][module] = result["status"]
+                summary = str(result.get("output") or "")
+                if not summary:
+                    summary = ("Discovered " + str(len(result.get("endpoints", []))) +
+                               " endpoints; " + str(len(result.get("probes", []))) +
+                               " probes; " + str(len(result.get("alerts", []))) + " module alerts")
+                if module == "zap-passive":
+                    summary = ("ZAP fetched " + str(job["request_count"]) +
+                               " URLs/requests; " + str(len(job["alerts"])) + " total alerts")
+                summary = summary[:1200]
                 elapsed_ms = round((time.monotonic() - started_at) * 1000)
-                job.setdefault("stage_details", {})[module] = {"status": result["status"], "elapsed_ms": elapsed_ms, "reason": str(result.get("reason", ""))[:250]}
-                log_event(job, "stage_finished", module=module, status=result["status"], elapsed_ms=elapsed_ms, reason=str(result.get("reason", ""))[:250], alerts=len(job.get("alerts", [])), endpoints=len(job.get("endpoints", [])))
+                job.setdefault("stage_details", {})[module] = {"status": result["status"], "elapsed_ms": elapsed_ms, "reason": str(result.get("reason", ""))[:250], "summary": summary}
+                log_event(job, "stage_finished", module=module, status=result["status"], elapsed_ms=elapsed_ms, reason=str(result.get("reason", ""))[:250], summary=summary[:350], alerts=len(job.get("alerts", [])), endpoints=len(job.get("endpoints", [])))
                 job["endpoint_sources"] = {key: sorted(set(value)) for key, value in endpoint_sources.items() if key in endpoints}
                 job["progress"] = round((position + 1) * 100 / len(spec.modules))
             stage_statuses = list(job["pipeline"].values())
