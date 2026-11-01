@@ -53,21 +53,37 @@ async def katana(url, host, agent, depth=1, limit=None):
         "-H", "User-Agent: " + agent, "-silent", "-duc"], config.KATANA_TIMEOUT_SECONDS)
     return {"status": status, "endpoints": list(dict.fromkeys(x.strip() for x in rows if in_host(x.strip(), host)))[:max(1, min(int(limit or config.ENDPOINT_LIMIT_DEFAULT), config.ENDPOINT_LIMIT_MAX))], "reason": " | ".join(x[:160] for x in rows if x.startswith("[diagnostic]") or x.startswith("[stderr]"))[:350]}
 
-async def nuclei(url, host, agent, urls=None):
+async def nuclei(url, host, agent, urls=None, default_ids=None,
+                 community_templates=None, custom_templates=None):
     """Run configured low-impact templates against selected exact-host URLs."""
     targets = list(dict.fromkeys(
         candidate for candidate in (urls if urls is not None else [url])
         if isinstance(candidate, str) and in_host(candidate, host)
     ))[:config.NUCLEI_TARGET_LIMIT]
-    templates = list(config.NUCLEI_TEMPLATE_PATHS)
+    from .nuclei_catalog import builtins
+    options = builtins()
+    selected_ids = list(options) if default_ids is None else default_ids
+    templates = [options[name] for name in selected_ids]
+    blobs = dict(community_templates or {})
+    for index, yaml_source in enumerate(custom_templates or []):
+        blobs[f"custom-{index+1}"] = yaml_source
+    if not templates and not blobs:
+        return {"status": "skipped", "alerts": [], "templates": [],
+                "targets_checked": 0, "reason": "No Nuclei templates selected"}
     if not targets:
         return {"status": "skipped", "alerts": [], "templates": [],
                 "targets_checked": 0, "reason": "No exact-host targets"}
-    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False,
-                                     prefix="asfb-nuclei-", suffix=".txt") as handle:
-        target_file = handle.name
-        handle.write("\n".join(targets) + "\n")
-    try:
+    with tempfile.TemporaryDirectory(prefix="asfb-nuclei-") as tmp:
+        target_file = os.path.join(tmp, "targets.txt")
+        with open(target_file, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(targets) + "\n")
+        for index, (label, content) in enumerate(blobs.items()):
+            from .nuclei_catalog import validate_template
+            validate_template(content)
+            path = os.path.join(tmp, f"custom-{index}.yaml")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(content)
+            templates.append(path)
         args = ["/usr/local/bin/nuclei", "-l", target_file]
         for template in templates:
             args.extend(["-t", template])
@@ -75,11 +91,6 @@ async def nuclei(url, host, agent, urls=None):
                      "-retries", "0", "-jsonl", "-silent", "-duc", "-dr", "-or",
                      "-H", "User-Agent: " + agent])
         rows, status = await execute(args, config.NUCLEI_TIMEOUT_SECONDS)
-    finally:
-        try:
-            os.unlink(target_file)
-        except FileNotFoundError:
-            pass
     findings = []
     for row in rows:
         try:
@@ -104,7 +115,7 @@ async def nuclei(url, host, agent, urls=None):
     diag = " | ".join(line[:180] for line in rows
                       if line.startswith(("[stderr]", "[diagnostic]")))
     return {"status": status, "alerts": findings[:config.NUCLEI_FINDINGS_LIMIT],
-            "templates": [t.rsplit("/", 1)[-1].removesuffix(".yaml") for t in templates],
+            "templates": (list(selected_ids) + list(blobs)),
             "targets_checked": len(targets), "reason": diag[:500]}
 
 _gau_failures = 0

@@ -17,6 +17,7 @@ from .jwtcheck import inspect_jwt
 from .pipeline import katana, nuclei, gau, probe, in_host
 from .review import ACTIVE_MODULES, review, choose_arjun_target
 from . import config
+from . import nuclei_catalog
 
 
 ZAP_KEY = os.environ.get("ZAP_API_KEY", "")
@@ -60,7 +61,14 @@ class Account(BaseModel):
     cookie: str = Field(default="", max_length=8000)
     headers: dict[str, str] = Field(default_factory=dict)
 
+class NucleiSettings(BaseModel):
+    default_ids: list[str] = Field(
+        default_factory=lambda: list(nuclei_catalog.builtins()), max_length=20)
+    community_paths: list[str] = Field(default_factory=list, max_length=config.NUCLEI_COMMUNITY_MAX)
+    custom_templates: list[str] = Field(default_factory=list, max_length=config.NUCLEI_CUSTOM_MAX)
+
 class PipelineOptions(BaseModel):
+    nuclei: NucleiSettings = Field(default_factory=NucleiSettings)
     endpoint_limit: int = Field(default=config.ENDPOINT_LIMIT_DEFAULT, ge=1, le=config.ENDPOINT_LIMIT_MAX)
     httpx_limit: int = Field(default=config.HTTPX_LIMIT_DEFAULT, ge=1, le=config.HTTPX_LIMIT_MAX)
     katana_depth: int = Field(default=config.KATANA_DEPTH_DEFAULT, ge=1, le=config.KATANA_DEPTH_MAX)
@@ -95,6 +103,14 @@ async def shutdown():
 @app.get("/")
 async def index():
     return FileResponse("/app/app/index.html")
+
+@app.get("/api/nuclei/templates", dependencies=[Depends(authorize)])
+async def search_nuclei_templates(q: str = "", page: int = 1):
+    try:
+        return await nuclei_catalog.catalog(q, page)
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(503, "Community template index unavailable: " + str(exc)[:180])
+
 
 @app.get("/api/health")
 async def health():
@@ -176,6 +192,14 @@ def remove_account(account_id: str, request: Request):
 async def create_scan(spec: ScanRequest, request: Request):
     if not spec.modules or len(spec.modules) != len(set(spec.modules)) or not set(spec.modules).issubset(({"zap-passive","katana","nuclei","gau","httpx"} | ACTIVE_MODULES)):
         raise HTTPException(422, "Invalid or duplicate pipeline modules")
+    if "nuclei" in spec.modules:
+        selection = spec.options.nuclei
+        try:
+            nuclei_catalog.validate_selection(
+                selection.default_ids, selection.community_paths, selection.custom_templates)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+
     if ACTIVE_MODULES.intersection(spec.modules):
         if not spec.active_confirmed:
             raise HTTPException(422, "Explicit permission for active single-target tests is required")
@@ -204,9 +228,12 @@ async def create_scan(spec: ScanRequest, request: Request):
                 and existing.get("modules") == spec.modules):
             return {"id": existing["id"], "status": existing["status"], "reused": True}
     identifier = uuid.uuid4().hex
+    recorded_options = spec.options.model_dump()
+    recorded_options["nuclei"]["custom_templates"] = [
+        "[inline template]" for _ in spec.options.nuclei.custom_templates]
     jobs[identifier] = {"owner": request.state.sid, "id": identifier, "asset_id": spec.asset_id, "target": url,
                         "status": "queued", "alerts": [], "error": None, "created": time.time(),
-                        "request_count": 0, "cancelled": False, "modules": spec.modules, "endpoints": [], "pipeline": {}, "reviews": [], "probes": [], "options": spec.options.model_dump(), "progress": 0, "stage": "queued"}
+                        "request_count": 0, "cancelled": False, "modules": spec.modules, "endpoints": [], "pipeline": {}, "reviews": [], "probes": [], "options": recorded_options, "progress": 0, "stage": "queued"}
     log_event(jobs[identifier], "queued", modules=spec.modules)
     # Public scan results are ephemeral.
     await queue.put((identifier, spec))
@@ -444,7 +471,16 @@ async def run_scan_job(identifier, spec):
                         "pending_records": pending_records,
                     }
                 elif module == "nuclei":
-                    result = await nuclei(url, host, spec.user_agent, endpoints)
+                    selection = spec.options.nuclei
+                    try:
+                        remote = await nuclei_catalog.community_files(selection.community_paths)
+                    except (ValueError, httpx.HTTPError) as exc:
+                        raise ValueError("Nuclei template download failed: " + str(exc)[:160])
+                    result = await nuclei(
+                        url, host, spec.user_agent, endpoints,
+                        default_ids=selection.default_ids,
+                        community_templates=remote,
+                        custom_templates=selection.custom_templates)
                     job["alerts"].extend(result["alerts"])
                 elif module in ACTIVE_MODULES:
                     review_url = (choose_arjun_target(url, endpoints, host)
