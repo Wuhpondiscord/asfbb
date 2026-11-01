@@ -105,3 +105,9 @@ The Space Docker image includes pinned ProjectDiscovery Nuclei v3.11.1 and Katan
 - **Batch scans:** preserve the module selection for each of the up to 40 jobs per batch. These scans run sequentially and are unauthenticated; configured account cookies are passed only to the original single-target ZAP stage, not the new tools.
 
 **Important**: Confirm the target program explicitly permits automated crawling and template-based requests. The project remains an experimental public Space and does not independently prove user authorization or reliably prevent DNS-rebinding/egress abuse. Do not enable unrestricted scanning against targets that have not authorized these activities. Scan detections are preliminary and require manual verification.
+
+## Configurable pipeline (GAU and HTTPX)
+
+ASFB additionally includes GAU v2.2.4 for archive-based URL discovery and ProjectDiscovery HTTPX v1.12.0 for limited HTTP metadata probing. Each module is opt-in. Edit the comma-separated stage order in Scan settings to rearrange selected modules; the server executes them sequentially. GAU and Katana collect exact-host URLs with deduplication. HTTPX currently checks only the first eligible URL (the primary target), not every discovered path, to cap traffic. ZAP and Nuclei likewise operate on the primary target; discovered URL reuse is not implied.
+
+The app is not safe for unrestricted public scanning. Authorization is self-asserted, and per-module rate limits are not a global cross-user rate limiter. Large batches should be restricted to explicitly authorized targets and conservative program-specific limits.

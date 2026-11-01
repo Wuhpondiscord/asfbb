@@ -51,7 +51,7 @@ async def nuclei(url, host, agent):
 
 async def gau(url, host):
     rows, status = await execute(["/usr/local/bin/gau", "--threads", "1", "--timeout", "15",
-        "--subs", "false", host], 55)
+        host], 55)
     return {"status": status, "endpoints": list(dict.fromkeys(
         value.strip() for value in rows if in_host(value.strip(), host)))[:100]}
 
