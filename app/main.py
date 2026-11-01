@@ -429,7 +429,7 @@ async def run_scan_job(identifier, spec):
                         "pending_records": pending_records,
                     }
                 elif module == "nuclei":
-                    result = await nuclei(url, host, spec.user_agent)
+                    result = await nuclei(url, host, spec.user_agent, endpoints)
                     job["alerts"].extend(result["alerts"])
                 elif module in ACTIVE_MODULES:
                     result = await review(module, url, host)

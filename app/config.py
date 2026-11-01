@@ -50,3 +50,13 @@ GAU_FALLBACK_PROVIDERS = ("otx", "commoncrawl")
 GAU_PROVIDER_DEADLINE_SECONDS = 12
 GAU_HTTP_TIMEOUT_SECONDS = 8
 GAU_AGGREGATE_ALL_PROVIDERS = False
+
+# Curated low-impact templates; the exact reviewed paths are explicit.
+NUCLEI_TEMPLATE_PATHS = (
+    "/app/app/nuclei-templates/technology-headers.yaml",
+    "/app/app/nuclei-templates/hsts-missing.yaml",
+    "/app/app/nuclei-templates/csp-missing.yaml",
+    "/app/app/nuclei-templates/server-error-disclosure.yaml",
+)
+NUCLEI_TARGET_LIMIT = 10
+NUCLEI_FINDINGS_LIMIT = 100

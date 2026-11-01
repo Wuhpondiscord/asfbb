@@ -53,26 +53,59 @@ async def katana(url, host, agent, depth=1, limit=None):
         "-H", "User-Agent: " + agent, "-silent", "-duc"], config.KATANA_TIMEOUT_SECONDS)
     return {"status": status, "endpoints": list(dict.fromkeys(x.strip() for x in rows if in_host(x.strip(), host)))[:max(1, min(int(limit or config.ENDPOINT_LIMIT_DEFAULT), config.ENDPOINT_LIMIT_MAX))], "reason": " | ".join(x[:160] for x in rows if x.startswith("[diagnostic]") or x.startswith("[stderr]"))[:350]}
 
-async def nuclei(url, host, agent):
-    rows, status = await execute(["/usr/local/bin/nuclei", "-u", url, "-t", "/app/app/nuclei-templates/technology-headers.yaml", "-rl", "1",
-        "-c", "1", "-bs", "1", "-timeout", "8", "-retries", "0", "-jsonl",
-        "-silent", "-duc", "-H", "User-Agent: " + agent], config.NUCLEI_TIMEOUT_SECONDS)
+async def nuclei(url, host, agent, urls=None):
+    """Run configured low-impact templates against selected exact-host URLs."""
+    targets = list(dict.fromkeys(
+        candidate for candidate in (urls if urls is not None else [url])
+        if isinstance(candidate, str) and in_host(candidate, host)
+    ))[:config.NUCLEI_TARGET_LIMIT]
+    templates = list(config.NUCLEI_TEMPLATE_PATHS)
+    if not targets:
+        return {"status": "skipped", "alerts": [], "templates": [],
+                "targets_checked": 0, "reason": "No exact-host targets"}
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False,
+                                     prefix="asfb-nuclei-", suffix=".txt") as handle:
+        target_file = handle.name
+        handle.write("\n".join(targets) + "\n")
+    try:
+        args = ["/usr/local/bin/nuclei", "-l", target_file]
+        for template in templates:
+            args.extend(["-t", template])
+        args.extend(["-rl", "1", "-c", "1", "-bs", "1", "-timeout", "8",
+                     "-retries", "0", "-jsonl", "-silent", "-duc", "-dr", "-or",
+                     "-H", "User-Agent: " + agent])
+        rows, status = await execute(args, config.NUCLEI_TIMEOUT_SECONDS)
+    finally:
+        try:
+            os.unlink(target_file)
+        except FileNotFoundError:
+            pass
     findings = []
     for row in rows:
         try:
             obj = json.loads(row)
-        except ValueError:
+        except (ValueError, TypeError):
             continue
-        found_url = obj.get("matched-at") or obj.get("host") or url
-        if not in_host(found_url, host):
+        if not isinstance(obj, dict):
+            continue
+        matched_url = obj.get("matched-at") or obj.get("matched") or obj.get("host") or url
+        if not in_host(matched_url, host):
             continue
         info = obj.get("info") or {}
-        findings.append({"name": info.get("name") or obj.get("template-id") or "Technology",
-                         "risk": str(info.get("severity", "info")).title().replace("Info", "Informational"),
-                         "confidence": "Medium", "url": found_url,
-                         "description": str(info.get("description") or "")[:1000],
-                         "source": "nuclei", "template_id": obj.get("template-id")})
-    return {"status": status, "alerts": findings[:100], "templates": ["asfb-tech-response-headers"], "targets_checked": 1, "reason": " | ".join(x[:180] for x in rows if x.startswith("[stderr]") or x.startswith("[diagnostic]"))[:500]}
+        if not isinstance(info, dict):
+            info = {}
+        findings.append({
+            "name": info.get("name") or obj.get("template-id") or "Template match",
+            "risk": str(info.get("severity", "info")).title().replace("Info", "Informational"),
+            "confidence": "Low", "url": matched_url,
+            "description": str(info.get("description") or "")[:1000],
+            "source": "nuclei", "template_id": obj.get("template-id")
+        })
+    diag = " | ".join(line[:180] for line in rows
+                      if line.startswith(("[stderr]", "[diagnostic]")))
+    return {"status": status, "alerts": findings[:config.NUCLEI_FINDINGS_LIMIT],
+            "templates": [t.rsplit("/", 1)[-1].removesuffix(".yaml") for t in templates],
+            "targets_checked": len(targets), "reason": diag[:500]}
 
 _gau_failures = 0
 _gau_disabled_until = 0.0
