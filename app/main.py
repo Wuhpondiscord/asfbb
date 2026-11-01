@@ -145,7 +145,7 @@ def remove_account(account_id: str, request: Request):
 async def create_scan(spec: ScanRequest, request: Request):
     if not spec.modules or not set(spec.modules).issubset({"zap-passive","katana","nuclei"}):
         raise HTTPException(422, "Only passive scanning is currently supported")
-    if queue.qsize() >= 100:
+    if queue.qsize() >= 1000:
         raise HTTPException(429, "Scan queue full")
     if not spec.policy_confirmed:
         raise HTTPException(422, "You must explicitly confirm program automation policy")
@@ -164,13 +164,13 @@ async def create_scan(spec: ScanRequest, request: Request):
     identifier = uuid.uuid4().hex
     jobs[identifier] = {"owner": request.state.sid, "id": identifier, "asset_id": spec.asset_id, "target": url,
                         "status": "queued", "alerts": [], "error": None, "created": time.time(),
-                        "request_count": 0, "cancelled": False, "modules": spec.modules, "endpoints": [], "pipeline": {}}
+                        "request_count": 0, "cancelled": False, "modules": spec.modules, "endpoints": [], "pipeline": {}, "progress": 0, "stage": "queued"}
     # Public scan results are ephemeral.
     await queue.put((identifier, spec))
     return {"id": identifier, "status": "queued"}
 
 class BatchRequest(BaseModel):
-    asset_ids: list[str] = Field(min_length=1, max_length=40)
+    asset_ids: list[str] = Field(min_length=1, max_length=1000)
     policy_confirmed: bool = False
     user_agent: str = Field(default="ASFB-Research/0.1", max_length=300)
     delay_seconds: float = Field(default=1.5, ge=1, le=30)
@@ -180,7 +180,7 @@ class BatchRequest(BaseModel):
 async def batch_scans(payload: BatchRequest, request: Request):
     if not payload.policy_confirmed:
         raise HTTPException(422, "Program policy confirmation is required")
-    if len(set(payload.asset_ids)) != len(payload.asset_ids) or queue.qsize() + len(payload.asset_ids) > 100:
+    if len(set(payload.asset_ids)) != len(payload.asset_ids) or queue.qsize() + len(payload.asset_ids) > 1000:
         raise HTTPException(422, "Duplicate assets or queue capacity exceeded")
     for asset_id in payload.asset_ids:
         item = assets.get(asset_id)
@@ -210,6 +210,23 @@ def jwt_inspect(payload: JWTInput):
 @app.get("/api/scans", dependencies=[Depends(authorize)])
 def scan_list(request: Request):
     return [v for v in jobs.values() if v.get("owner") == request.state.sid][-100:]
+
+@app.delete("/api/findings", dependencies=[Depends(authorize)])
+def clear_findings(request: Request):
+    cleared = 0
+    for job in jobs.values():
+        if job.get("owner") == request.state.sid:
+            cleared += len(job.get("alerts") or [])
+            job["alerts"] = []
+    return {"cleared": cleared}
+
+@app.get("/api/report", dependencies=[Depends(authorize)])
+def full_report(request: Request):
+    owned = [j for j in jobs.values() if j.get("owner") == request.state.sid]
+    return {"version": 1, "generated": time.time(),
+            "jobs": owned, "total_targets": len(owned),
+            "total_alerts": sum(len(j.get("alerts") or []) for j in owned),
+            "endpoints": sorted(set(url for j in owned for url in (j.get("endpoints") or [])))}
 
 @app.get("/api/scans/{scan_id}", dependencies=[Depends(authorize)])
 def scan_status(scan_id: str, request: Request):
@@ -242,6 +259,8 @@ async def worker():
                 job["status"] = "cancelled"
                 continue
             job["status"] = "running"
+            job["progress"] = 3
+            job["stage"] = "validation"
             url, host = target_url(assets[spec.asset_id])
             profile = accounts.get(spec.account_id) if spec.account_id else None
             headers = {"User-Agent": spec.user_agent}
@@ -249,6 +268,14 @@ async def worker():
                 headers.update(profile["headers"])
                 if profile["cookie"]:
                     headers["Cookie"] = profile["cookie"]
+            job["progress"] = 10
+            job["stage"] = "discovery"
+            if "katana" in spec.modules and not job["cancelled"]:
+                result = await katana(url, host, spec.user_agent)
+                job["endpoints"] = result["endpoints"]
+                job["pipeline"]["katana"] = result["status"]
+            job["progress"] = 40
+            job["stage"] = "zap-passive"
             # Every job uses ZAP's HTTP proxy to populate passive alerts. No active scanning.
             async with httpx.AsyncClient(timeout=15, follow_redirects=False, trust_env=False,
                                          proxy=ZAP_URL, verify=False) as client:
@@ -276,21 +303,23 @@ async def worker():
                   info = await zap_call(z, "core", "view/alerts", {"baseurl": url, "start": "0", "count": "100"})
                   alerts = info.get("alerts", [])
                   job["alerts"] = [{
+                      "source": "zap",
                       "name": a.get("name"), "risk": a.get("risk"),
                       "confidence": a.get("confidence"), "url": a.get("url"),
                       "description": (a.get("description") or "")[:1000]
                   } for a in alerts if urlsplit(a.get("url") or "").hostname == host]
-            if "katana" in spec.modules and not job["cancelled"]:
-                result = await katana(url, host, spec.user_agent)
-                job["endpoints"] = result["endpoints"]
-                job["pipeline"]["katana"] = result["status"]
+            job["progress"] = 72
+            job["stage"] = "nuclei"
             if "nuclei" in spec.modules and not job["cancelled"]:
                 result = await nuclei(url, host, spec.user_agent)
                 job["alerts"].extend(result["alerts"])
                 job["pipeline"]["nuclei"] = result["status"]
             job["status"] = "completed"
+            job["progress"] = 100
+            job["stage"] = "complete"
         except Exception as exc:
             job["status"] = "failed"
+            job["stage"] = "failed"
             job["error"] = str(exc)[:250]
         finally:
             # Never retain authenticated headers in logs or job history.
