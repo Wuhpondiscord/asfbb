@@ -14,8 +14,8 @@ def test_depth_rejected(depth):
         main.PipelineOptions(katana_depth=depth)
 
 @pytest.mark.parametrize("name,value", [
-    ("endpoint_limit",101),("httpx_limit",11),
-    ("zap_endpoint_limit",11),("request_budget",101)])
+    ("endpoint_limit",2001),("httpx_limit",101),
+    ("zap_endpoint_limit",101),("request_budget",2001)])
 def test_option_bounds(name,value):
     with pytest.raises(ValidationError):
         main.PipelineOptions(**{name:value})
@@ -37,3 +37,7 @@ def test_logging_event_shape():
     main.log_event({"owner":"test","id":"job1","target":"https://example.org"},"stage_finished",
                    module="katana",elapsed_ms=100,status="completed")
     assert main.scan_events[-1]["elapsed_ms"]==100
+
+def test_large_discovery_budget_is_accepted():
+    cfg=main.PipelineOptions(endpoint_limit=1000, request_budget=1000, httpx_limit=80, zap_endpoint_limit=80)
+    assert cfg.endpoint_limit == 1000
