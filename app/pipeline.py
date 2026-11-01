@@ -18,6 +18,15 @@ async def execute(args, timeout):
         return ["Binary missing"], "unavailable"
     try:
         out, err = await asyncio.wait_for(p.communicate(), timeout)
+    except asyncio.CancelledError:
+        # Cancelling a scan must terminate its tool process, not only its Python task.
+        if p.returncode is None:
+            try:
+                p.kill()
+            except ProcessLookupError:
+                pass
+        await p.communicate()
+        raise
     except asyncio.TimeoutError:
         p.kill()
         out, err = await p.communicate()

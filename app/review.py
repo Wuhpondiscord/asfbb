@@ -106,16 +106,29 @@ async def review(module, url, host):
                    else config.PROCESS_TIMEOUT_SECONDS)
         lines, status = await execute(args, timeout)
     has_evidence = module == "dalfox" and any("[POC]" in line for line in lines)
+    exit_code = next((int(line.rsplit(":", 1)[1].strip()) for line in lines
+                      if line.startswith("[diagnostic] Process exit code:")
+                      and line.rsplit(":", 1)[1].strip().isdigit()), None)
     if module == "dalfox" and status == "failed":
-        # Dalfox documents code 1 for findings, code 2 for a scan error.
-        code_one = any(line.strip() == "[diagnostic] Process exit code: 1" for line in lines)
-        if code_one and has_evidence:
+        # Documented: 0 = clean, 1 = findings, 2 = runtime/configuration error.
+        if exit_code == 1:
             status = "findings"
         elif has_evidence:
             status = "partial"
+    # Code 1 is an expected Dalfox finding outcome, not an error diagnostic.
+    displayed_lines = [line for line in lines
+                       if not (module == "dalfox" and status == "findings"
+                               and line.strip() == "[diagnostic] Process exit code: 1")]
+    reason = " | ".join(line[:180] for line in displayed_lines
+                        if line.startswith(("[stderr]", "[diagnostic]")))
+    if not reason and status == "failed":
+        reason = f"{module} exited unsuccessfully; inspect its output"
+    if not reason and status == "partial" and has_evidence:
+        reason = "Unverified findings were returned, but the tool did not finish cleanly"
     return {"source": module, "status": status, "target": url,
+            "exit_code": exit_code,
             "parameters": parameters,
             "endpoints": ffuf_discoveries(lines, host) if module == "ffuf" else [],
-            "output": summarize_review(module, lines),
-            "reason": (" | ".join(line[:180] for line in lines if line.startswith("[stderr]") or line.startswith("[diagnostic]")) or ("Dalfox returned a nonzero exit with unverified findings; runtime verification required" if has_evidence and status in ("partial", "findings") else (f"{module} returned an unsuccessful exit status; inspect captured output" if status == "failed" else "")))[:500],
+            "output": summarize_review(module, displayed_lines),
+            "reason": reason[:500],
             "note": "Unverified tool output. Confirm impact manually before reporting."}
