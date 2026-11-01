@@ -59,6 +59,8 @@ class PipelineOptions(BaseModel):
     httpx_limit: int = Field(default=3, ge=1, le=10)
     katana_depth: int = Field(default=1, ge=1, le=2)
     zap_endpoint_limit: int = Field(default=1, ge=1, le=10)
+    request_budget: int = Field(default=20, ge=1, le=100)
+    discovery_first: bool = True
 
 class ScanRequest(BaseModel):
     asset_id: str
@@ -269,6 +271,7 @@ async def worker():
             job["status"] = "running"
             url, host = target_url(assets[spec.asset_id])
             endpoints = [url]
+            endpoint_sources = {url: ["scope"]}
             # Modules execute in the user-selected order, sequentially, with bounded output.
             for position, module in enumerate(spec.modules):
                 if job["cancelled"]:
@@ -279,11 +282,15 @@ async def worker():
                 job["pipeline"][module] = "running"
                 if module == "gau":
                     result = await gau(url, host)
+                    for discovered in result["endpoints"]:
+                        endpoint_sources.setdefault(discovered, []).append("gau")
                     endpoints = list(dict.fromkeys(endpoints + result["endpoints"]))[:spec.options.endpoint_limit]
                     job["endpoints"] = endpoints[1:]
                 elif module == "katana":
                     result = await katana(url, host, spec.user_agent, spec.options.katana_depth)
-                    endpoints = list(dict.fromkeys(endpoints + result["endpoints"]))[:100]
+                    for discovered in result["endpoints"]:
+                        endpoint_sources.setdefault(discovered, []).append("katana")
+                    endpoints = list(dict.fromkeys(endpoints + result["endpoints"]))[:spec.options.endpoint_limit]
                     job["endpoints"] = endpoints[1:]
                 elif module == "httpx":
                     result = await probe(endpoints, host, spec.user_agent, spec.options.httpx_limit)
@@ -327,6 +334,7 @@ async def worker():
                     result = await nuclei(url, host, spec.user_agent)
                     job["alerts"].extend(result["alerts"])
                 job["pipeline"][module] = result["status"]
+                job["endpoint_sources"] = {key: sorted(set(value)) for key, value in endpoint_sources.items() if key in endpoints}
                 job["progress"] = round((position + 1) * 100 / len(spec.modules))
             job["status"] = "cancelled" if job["cancelled"] else "completed"
             job["stage"] = job["status"]
