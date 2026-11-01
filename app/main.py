@@ -116,6 +116,28 @@ async def nuclei_template_defaults():
     }
 
 
+class NucleiTemplateCheckRequest(BaseModel):
+    paths: list[str] = Field(default_factory=list, max_length=config.NUCLEI_COMMUNITY_MAX)
+
+
+@app.post("/api/nuclei/check", dependencies=[Depends(authorize)])
+async def check_nuclei_community_templates(payload: NucleiTemplateCheckRequest):
+    if not payload.paths or len(payload.paths) != len(set(payload.paths)):
+        raise HTTPException(422, "Select distinct community template paths")
+    try:
+        nuclei_catalog.validate_selection([], payload.paths, [])
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    compatible, rejected = [], []
+    for path in payload.paths:
+        try:
+            await nuclei_catalog.community_files([path])
+            compatible.append(path)
+        except (ValueError, httpx.HTTPError) as exc:
+            rejected.append({"path": path, "reason": str(exc)[:180]})
+    return {"compatible": compatible, "rejected": rejected}
+
+
 @app.get("/api/nuclei/templates", dependencies=[Depends(authorize)])
 async def search_nuclei_templates(q: str = "", page: int = 1):
     try:
