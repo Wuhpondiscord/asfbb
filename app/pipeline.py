@@ -115,6 +115,8 @@ async def gau(url, host, limit=None):
     global _gau_failures, _gau_disabled_until
     maximum = max(1, min(int(limit or config.ENDPOINT_LIMIT_DEFAULT), config.ENDPOINT_LIMIT_MAX))
     providers = (config.GAU_PROVIDER,) + tuple(config.GAU_FALLBACK_PROVIDERS)
+    if config.GAU_ENABLE_WAYBACK and "wayback" not in providers:
+        providers += ("wayback",)
     collected = []
     provider_results = []
     now = time.monotonic()

@@ -41,12 +41,14 @@ ZAP_PASSIVE_POLL_LIMIT = 12
 ZAP_PASSIVE_POLL_SECONDS = 0.5
 
 # One GAU archive source is selected at a time; change after validating availability.
-GAU_PROVIDER = "wayback"
+GAU_PROVIDER = "otx"
 
 PROCESS_OUTPUT_MAX_LINES = 5000
 
 # GAU: fallback providers are queried when Wayback has no successful URL response.
-GAU_FALLBACK_PROVIDERS = ("otx", "commoncrawl")
+GAU_FALLBACK_PROVIDERS = ("commoncrawl",)
+# Wayback is opt-in until its availability recovers.
+GAU_ENABLE_WAYBACK = False
 GAU_PROVIDER_DEADLINE_SECONDS = 12
 GAU_HTTP_TIMEOUT_SECONDS = 8
 GAU_AGGREGATE_ALL_PROVIDERS = False
