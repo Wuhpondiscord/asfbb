@@ -91,3 +91,6 @@ OpenAPI discovery, per-program policy manifests, scoped crawling, differential t
 **Public Space**: The landing page can be viewed without authentication. Operator actions retain `ASFB_API_KEY`: removing access control from an internet-exposed scanner would allow strangers to control scans and read your account profiles. The internal `ZAP_API_KEY` remains necessary.
 
 Still pending: cross-account IDOR testing, live JWT signature bypass testing, authenticated browser crawling, Nuclei integration, program-policy extraction, and full isolation for a public multiuser service.
+
+## No manual API keys
+The dashboard no longer requests an ASFB API key. The startup script generates an internal ZAP API key automatically. **Warning:** this build has no public API authentication; do not use it on a publicly accessible Space with real credentials or sensitive targets. Public anonymous scanning must be protected by appropriate abuse prevention and per-user isolation before production use.
