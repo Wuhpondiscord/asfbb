@@ -1,6 +1,7 @@
 """Opt-in single-target verification stages. Output is evidence, not confirmed findings."""
 from urllib.parse import urlsplit
 from .pipeline import execute, in_host
+from . import config
 
 ACTIVE_MODULES = {"ffuf", "sqlmap", "dalfox", "arjun"}
 
@@ -29,7 +30,7 @@ async def review(module, url, host):
     if module == "sqlmap" and not urlsplit(url).query:
         return {"source": module, "status": "skipped", "target": url, "output": "", "reason": "URL has no query parameters"}
     args = command(module, url, host)
-    lines, status = await execute(args, 40)
+    lines, status = await execute(args, config.PROCESS_TIMEOUT_SECONDS)
     return {"source": module, "status": status, "target": url,
             "output": "\n".join(lines)[:2500],
             "reason": " | ".join(line[:180] for line in lines if line.startswith("[stderr]"))[:500],

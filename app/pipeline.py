@@ -2,6 +2,7 @@ import asyncio
 import json
 import re
 from urllib.parse import urlsplit
+from . import config
 
 def clean_output(data):
     value = data.decode("utf-8", "replace") if isinstance(data, bytes) else str(data)
@@ -33,13 +34,13 @@ def in_host(url, host):
 async def katana(url, host, agent, depth=1):
     rows, status = await execute(["/usr/local/bin/katana", "-u", url, "-d", str(max(1,min(int(depth),5))), "-fs", "fqdn", "-c", "1",
         "-p", "1", "-rl", "1", "-ct", "30s", "-timeout", "8", "-retry", "0",
-        "-H", "User-Agent: " + agent, "-silent", "-duc"], 65)
+        "-H", "User-Agent: " + agent, "-silent", "-duc"], config.KATANA_TIMEOUT_SECONDS)
     return {"status": status, "endpoints": list(dict.fromkeys(x.strip() for x in rows if in_host(x.strip(), host)))[:100]}
 
 async def nuclei(url, host, agent):
     rows, status = await execute(["/usr/local/bin/nuclei", "-u", url, "-t", "/app/app/nuclei-templates/technology-headers.yaml", "-rl", "1",
         "-c", "1", "-bs", "1", "-timeout", "8", "-retries", "0", "-jsonl",
-        "-silent", "-duc", "-H", "User-Agent: " + agent], 90)
+        "-silent", "-duc", "-H", "User-Agent: " + agent], config.NUCLEI_TIMEOUT_SECONDS)
     findings = []
     for row in rows:
         try:
@@ -59,7 +60,7 @@ async def nuclei(url, host, agent):
 
 async def gau(url, host):
     rows, status = await execute(["/usr/local/bin/gau", "--threads", "1", "--timeout", "8",
-        "--retries", "0", "--providers", "wayback", host], 25)
+        "--retries", "0", "--providers", "wayback", host], config.GAU_TIMEOUT_SECONDS)
     return {"status": status, "endpoints": list(dict.fromkeys(
         value.strip() for value in rows if in_host(value.strip(), host)))[:100], "reason": " | ".join(x for x in rows if x.startswith("[diagnostic]") or x.startswith("[stderr]"))[:350]}
 
