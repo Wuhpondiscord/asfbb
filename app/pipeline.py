@@ -17,8 +17,11 @@ async def execute(args, timeout):
         out, err = await asyncio.wait_for(p.communicate(), timeout)
     except asyncio.TimeoutError:
         p.kill()
-        await p.communicate()
-        return ["[diagnostic] Stage exceeded its execution deadline; no complete output was available"], "timeout"
+        out, err = await p.communicate()
+        lines = clean_output(out).splitlines()[:500]
+        lines += ["[stderr] " + line[:200] for line in clean_output(err).splitlines()[-8:]]
+        lines.append("[diagnostic] Deadline exceeded after " + str(timeout) + " seconds; partial output retained")
+        return lines, "timeout"
     lines = clean_output(out).splitlines()[:500]
     if p.returncode:
         lines += ["[stderr] " + x[:200] for x in clean_output(err).splitlines()[-8:]]
@@ -35,7 +38,7 @@ async def katana(url, host, agent, depth=1):
     rows, status = await execute(["/usr/local/bin/katana", "-u", url, "-d", str(max(1,min(int(depth),5))), "-fs", "fqdn", "-c", "1",
         "-p", "1", "-rl", "1", "-ct", "30s", "-timeout", "8", "-retry", "0",
         "-H", "User-Agent: " + agent, "-silent", "-duc"], config.KATANA_TIMEOUT_SECONDS)
-    return {"status": status, "endpoints": list(dict.fromkeys(x.strip() for x in rows if in_host(x.strip(), host)))[:100]}
+    return {"status": status, "endpoints": list(dict.fromkeys(x.strip() for x in rows if in_host(x.strip(), host)))[:100], "reason": " | ".join(x[:160] for x in rows if x.startswith("[diagnostic]") or x.startswith("[stderr]"))[:350]}
 
 async def nuclei(url, host, agent):
     rows, status = await execute(["/usr/local/bin/nuclei", "-u", url, "-t", "/app/app/nuclei-templates/technology-headers.yaml", "-rl", "1",
@@ -90,4 +93,4 @@ async def probe(urls, host, agent, limit=1):
                                "source": "httpx"})
         except ValueError:
             continue
-    return {"status": status, "probes": probes[:100]}
+    return {"status": status, "probes": probes[:100], "reason": " | ".join(x[:160] for x in all_rows if x.startswith("[diagnostic]") or x.startswith("[stderr]"))[:350]}
