@@ -283,7 +283,9 @@ function keepReportStable(){
 }
 async function loadScans(force=false){try{
  if(!force&&keepReportStable())return;
- scanJobs=await api('/scans');findings=flattenJobs();
+ const latestJobs=await api('/scans');
+ if(!force&&keepReportStable())return; // Interaction may begin during the request.
+ scanJobs=latestJobs;findings=flattenJobs();
  const hosts=[...new Set(findings.map(f=>{try{return new URL(f.url).hostname}catch{return ''}}).filter(Boolean))].sort();
  const previous=el('findHost').value;
  el('findHost').innerHTML='<option value="all">All hosts</option>'+hosts.map(host=>'<option value="'+esc(host)+'">'+esc(host)+'</option>').join('');
@@ -321,6 +323,6 @@ async function loadScans(force=false){try{
  window.scrollTo({top:currentScroll,behavior:'instant'});
  renderFindings();
  }catch(e){message('Could not load jobs: '+e.message,true)}}
-async function loadLogs(force=false){try{if(!force&&keepReportStable())return;const r=await api('/logs');el('fullLogs').textContent=JSON.stringify(r.events||[],null,2)}catch(e){message(e.message,true)}}
+async function loadLogs(force=false){try{if(!force&&keepReportStable())return;const r=await api('/logs');if(!force&&keepReportStable())return;el('fullLogs').textContent=JSON.stringify(r.events||[],null,2)}catch(e){message(e.message,true)}}
 function copyLogs(){navigator.clipboard.writeText(el('fullLogs').textContent).then(()=>message('Logs copied.')).catch(e=>message(e.message,true))}
 window.addEventListener('DOMContentLoaded',()=>{loadNucleiDefaults();refresh();setInterval(()=>{if(!autoRefreshPaused){loadScans();if(currentTab==='logs')loadLogs()}},3000)});</script></body></html>
