@@ -463,9 +463,13 @@ async def run_scan_job(identifier, spec):
                 summary = ("Discovered " + str(len(result.get("endpoints", []))) +
                            " endpoints; " + str(len(result.get("probes", []))) +
                            " probes; " + str(len(result.get("alerts", []))) + " module alerts")
+            if module == "gau":
+                summary = str(result.get("summary") or summary) + (
+                    "; " + str(result.get("reason")) if result.get("reason") else "")
             if module == "nuclei":
                 summary = ("Nuclei templates: " +
                            ", ".join(result.get("templates", ["unknown"])) +
+                           "; URLs: " + str(result.get("targets_checked", 0)) +
                            "; matches: " + str(len(result.get("alerts", []))))
             if module == "arjun":
                 summary = (str(len(result.get("parameters", []))) +
@@ -482,7 +486,7 @@ async def run_scan_job(identifier, spec):
             counts = {
                 "new_endpoints": len(result.get("endpoints", [])),
                 "new_probes": len(result.get("probes", [])),
-                "new_alerts": len(result.get("alerts", [])),
+                "new_alerts": len(result.get("alerts", [])) + len(result.get("findings", [])),
                 "new_parameters": len(result.get("parameters", [])),
             }
             elapsed_ms = round((time.monotonic() - started_at) * 1000)

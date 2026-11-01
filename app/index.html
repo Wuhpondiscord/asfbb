@@ -119,7 +119,7 @@ function renderFindings(){
  el('findBadge').textContent=findings.length;
  el('findSummary').innerHTML=Object.entries(counts).map(([k,v])=>'<div><span class="pill '+k.toLowerCase()+'">'+k+'</span><strong>'+v+'</strong><small>unique detections</small></div>').join('');
  el('findCount').textContent='Showing '+list.length+' of '+findings.length+' unique detections ('+scanJobs.reduce((n,j)=>n+(j.alerts||[]).length,0)+' raw alerts).';
- el('findList').innerHTML=list.length?list.map(f=>'<article class="findrow"><div class="findhead"><span class="pill '+esc(f.risk.toLowerCase())+'">'+esc(f.risk)+'</span><span class="pill">Confidence: '+esc(f.confidence)+'</span><strong>'+esc(f.name)+'</strong></div><div class="subtle" style="margin-top:7px">'+esc(f.url)+' · '+f.count+' occurrence(s)</div><details><summary>Evidence and next steps</summary><pre>'+esc(f.description)+'</pre><p class="subtle">ZAP passive finding. Manually verify impact and the program reportability rules before submitting.</p></details></article>').join(''):'<div class="empty">No findings match these filters.</div>';
+ el('findList').innerHTML=list.length?list.map(f=>'<article class="findrow"><div class="findhead"><span class="pill '+esc(f.risk.toLowerCase())+'">'+esc(f.risk)+'</span><span class="pill">Confidence: '+esc(f.confidence)+'</span><strong>'+esc(f.name)+'</strong></div><div class="subtle" style="margin-top:7px">'+esc(f.url)+' · '+f.count+' occurrence(s)</div><details><summary>Evidence and next steps</summary><pre>'+esc(f.description)+'</pre><p class="subtle">Automated finding from '+esc(f.sources.join(", "))+'; verify context, impact, and program reportability before submitting.</p></details></article>').join(''):'<div class="empty">No findings match these filters.</div>';
 }
 function download(name,blob,type){const url=URL.createObjectURL(new Blob([blob],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1500)}
 async function clearFindings(){if(!confirm("Clear all detections in this browser session?"))return;try{const r=await api('/findings',{method:'DELETE'});await loadScans();message('Cleared '+r.cleared+' detections.')}catch(e){message(e.message,true)}}
@@ -157,6 +157,7 @@ async function loadScans(){try{
  const currentScroll=window.scrollY;
  el('scans').innerHTML=scanJobs.slice().reverse().map(j=>{
  const endpoints=(j.endpoints||[]).map(u=>'<li>'+esc(u)+'</li>').join('');
+ const parameters=(j.parameters||[]).map(p=>'<li>'+esc(p.method||'GET')+' '+esc(p.url)+' · '+esc(p.name)+'</li>').join('');
  const evidence=(j.reviews||[]).map(r=>'<details data-detail-key="'+esc(j.id+':review:'+r.source)+'" '+(existingOpen.has(j.id+':review:'+r.source)?'open':'')+'><summary>'+esc(r.source)+' · '+esc(r.status)+'</summary><pre class="results">'+esc(r.output||(r.status==='skipped'?'Skipped: '+(r.reason||'input not eligible'):r.status==='completed'?'No matching results reported by the module.':(r.reason||'No output captured')))+'</pre><p class="muted">Tool output is unverified; review evidence before reporting.</p></details>').join('');
  const moduleLogs=Object.entries(j.stage_details||{}).map(([name,d])=>'<details data-detail-key="'+esc(j.id+':log:'+name)+'" '+(existingOpen.has(j.id+':log:'+name)?'open':'')+'><summary>'+esc(name)+' · '+esc(d.status)+' · '+Math.round(d.elapsed_ms/1000)+'s</summary><pre class="results">'+esc(d.summary||'No further output')+'</pre>'+(d.reason?'<p class="error">'+esc(d.reason)+'</p>':'')+'</details>').join('');
  const stages=Object.entries(j.pipeline||{}).map(([n,v])=>'<span class="pill">'+esc(n)+': '+esc(v)+(j.stage_details?.[n]?.elapsed_ms!==undefined?' · '+Math.round(j.stage_details[n].elapsed_ms/1000)+'s':'')+'</span>').join(' ');
@@ -169,6 +170,7 @@ async function loadScans(){try{
  '<div class="controls">'+stages+'</div>'+
  (j.error?'<p class="error">'+esc(j.error)+'</p>':'')+Object.entries(j.stage_details||{}).filter(([n,d])=>d.reason).map(([n,d])=>'<p class="subtle">'+esc(n)+': '+esc(d.reason)+'</p>').join('')+
  moduleLogs+
+ (parameters?'<details data-detail-key="'+esc(j.id+':parameters')+'" '+(existingOpen.has(j.id+':parameters')?'open':'')+'><summary>Discovered parameters</summary><ul>'+parameters+'</ul></details>':'')+
  (endpoints?'<details data-detail-key="'+esc(j.id+':endpoints')+'" '+(existingOpen.has(j.id+':endpoints')?'open':'')+'><summary>Discovered endpoints</summary><ul>'+endpoints+'</ul></details>':'')+
  evidence+
  (j.status==='queued'?'':'<button class="secondary" onclick="switchTab(\'findings\')">View findings</button>')+'</details>';
