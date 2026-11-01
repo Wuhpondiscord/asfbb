@@ -58,7 +58,9 @@ jobs:
             grep -q -- "-json" /tmp/ffuf-help
             /opt/asfb-venv/bin/arjun -h > /tmp/arjun-help 2>&1 || true
             grep -q -- "-oJ" /tmp/arjun-help
-            /usr/local/bin/nuclei -validate -t /app/app/nuclei-templates/technology-headers.yaml -duc > /tmp/nuclei-validate 2>&1
+            /usr/local/bin/nuclei -validate -t /app/app/nuclei-templates -duc > /tmp/nuclei-validate 2>&1
+            /opt/asfb-venv/bin/python -c "from app import config; import pathlib; assert all(pathlib.Path(p).is_file() for p in config.NUCLEI_TEMPLATE_PATHS)"
+            /opt/asfb-venv/bin/python -c "from app import config; assert config.ARJUN_WORDLIST in (\"small\", \"medium\", \"large\")"
             /opt/asfb-venv/bin/python -c "import pathlib; assert pathlib.Path(\"/opt/sqlmap/sqlmap.py\").is_file()"
           '
       - name: Validate Hugging Face token
