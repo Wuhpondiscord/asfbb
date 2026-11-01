@@ -115,6 +115,21 @@ async def import_file(request: Request, file: UploadFile = File(...)):
     # Keep public browser data ephemeral.
     return {"imported": len(rows), "web": sum(r["compatibility"] == "web" for r in rows)}
 
+@app.delete("/api/assets", dependencies=[Depends(authorize)])
+async def clear_scope(request: Request):
+    """Clear imported scope for this session; keep historical jobs and findings."""
+    owned_ids = {key for key, asset in assets.items()
+                 if asset.get("owner") == request.state.sid}
+    affected_jobs = {job["id"] for job in jobs.values()
+                     if job.get("owner") == request.state.sid
+                     and job.get("asset_id") in owned_ids
+                     and job.get("status") in ("queued", "running")}
+    cancellation = cancel_owned_jobs(request.state.sid, affected_jobs)
+    for key in owned_ids:
+        assets.pop(key, None)
+    return {"cleared": len(owned_ids), **cancellation}
+
+
 @app.get("/api/assets", dependencies=[Depends(authorize)])
 def list_assets(request: Request, bounty_only: bool = False, severity: str = "all", compatible_only: bool = False, search: str = "", max_reports: int | None = None):
     rows = [a for a in assets.values() if a.get("owner") == request.state.sid]
