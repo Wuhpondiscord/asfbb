@@ -44,13 +44,13 @@ def summarize_review(module, lines):
                                 if 300 <= item["status"] < 400 and item.get("redirectlocation"))
             common = {pair for pair, count in redirects.items() if count >= 3}
             kept = [item for item in results if (item.get("status"), item.get("redirectlocation")) not in common]
-            return ("\\n".join(f'{item["status"]} {item["url"]} -> {item.get("redirectlocation") or "-"}' for item in kept[:100])
-                    + (f"\\nSuppressed {len(results)-len(kept)} repeated redirects to the same destination; likely wildcard redirect behavior." if common else "")).strip()
+            return ("\n".join(f'{item["status"]} {item["url"]} -> {item.get("redirectlocation") or "-"}' for item in kept[:100])
+                    + (f"\nSuppressed {len(results)-len(kept)} repeated redirects to the same destination; likely wildcard redirect behavior." if common else "")).strip()
     if module == "arjun":
-        cleaned = [re.sub(r"\\s+", " ", line).strip() for line in lines
+        cleaned = [re.sub(r"\s+", " ", line).strip() for line in lines
                    if not re.search(r"Processing chunks:|^\\s*[_/\\\\|()]+\\s*$", line)]
-        return "\\n".join(line for line in cleaned if line)[-2500:]
-    return "\\n".join(lines)[:5000]
+        return "\n".join(line for line in cleaned if line)[-2500:]
+    return "\n".join(lines)[:5000]
 
 async def review(module, url, host):
     if module == "sqlmap" and not urlsplit(url).query:
