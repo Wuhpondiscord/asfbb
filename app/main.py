@@ -298,7 +298,8 @@ async def worker():
                     break
                 public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
                 job["stage"] = module
-                log_event(job, "stage_started", module=module)
+                started_at = time.monotonic()
+                log_event(job, "stage_started", module=module, position=position + 1, total=len(spec.modules), endpoints=len(endpoints))
                 job["progress"] = round(position * 100 / len(spec.modules))
                 job["pipeline"][module] = "running"
                 if module == "gau":
@@ -362,7 +363,9 @@ async def worker():
                     result = await review(module, url, host)
                     job["reviews"].append(result)
                 job["pipeline"][module] = result["status"]
-                log_event(job, "stage_finished", module=module, status=result["status"], reason=result.get("reason", ""), alerts=len(job.get("alerts", [])), endpoints=len(job.get("endpoints", [])))
+                elapsed_ms = round((time.monotonic() - started_at) * 1000)
+                job.setdefault("stage_details", {})[module] = {"status": result["status"], "elapsed_ms": elapsed_ms, "reason": str(result.get("reason", ""))[:250]}
+                log_event(job, "stage_finished", module=module, status=result["status"], elapsed_ms=elapsed_ms, reason=str(result.get("reason", ""))[:250], alerts=len(job.get("alerts", [])), endpoints=len(job.get("endpoints", [])))
                 job["endpoint_sources"] = {key: sorted(set(value)) for key, value in endpoint_sources.items() if key in endpoints}
                 job["progress"] = round((position + 1) * 100 / len(spec.modules))
             job["status"] = "cancelled" if job["cancelled"] else "completed"
@@ -373,6 +376,7 @@ async def worker():
         except Exception as exc:
             job["status"] = "failed"
             job["stage"] = "failed"
-            job["error"] = str(exc)[:250]
+            job["error"] = exc.__class__.__name__
+            log_event(job, "failed", error_type=exc.__class__.__name__)
         finally:
             queue.task_done()
