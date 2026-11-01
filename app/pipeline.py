@@ -63,7 +63,7 @@ async def nuclei(url, host, agent):
                          "confidence": "Medium", "url": found_url,
                          "description": str(info.get("description") or "")[:1000],
                          "source": "nuclei", "template_id": obj.get("template-id")})
-    return {"status": status, "alerts": findings[:100], "reason": " | ".join(x[:180] for x in rows if x.startswith("[stderr]") or x.startswith("[diagnostic]"))[:500]}
+    return {"status": status, "alerts": findings[:100], "templates": ["asfb-tech-response-headers"], "targets_checked": 1, "reason": " | ".join(x[:180] for x in rows if x.startswith("[stderr]") or x.startswith("[diagnostic]"))[:500]}
 
 _gau_failures = 0
 _gau_disabled_until = 0.0
@@ -74,7 +74,7 @@ async def gau(url, host):
         return {"status": "unavailable", "endpoints": [],
                 "reason": "Wayback archive requests repeatedly timed out; provider temporarily disabled for this process"}
     rows, status = await execute(["/usr/local/bin/gau", "--threads", "1", "--timeout", "8",
-        "--retries", "0", "--providers", "wayback", host], config.GAU_TIMEOUT_SECONDS)
+        "--retries", "0", "--providers", config.GAU_PROVIDER, host], config.GAU_TIMEOUT_SECONDS)
     if status == "timeout":
         _gau_failures += 1
         if _gau_failures >= config.GAU_BREAKER_FAILURES:

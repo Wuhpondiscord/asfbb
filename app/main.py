@@ -381,6 +381,16 @@ async def worker():
                 elif module in ACTIVE_MODULES:
                     result = await review(module, url, host)
                     job["reviews"].append(result)
+                    if module == "ffuf":
+                        discovered_urls = [
+                            candidate for candidate in result.get("endpoints", [])
+                            if in_host(candidate, host)
+                        ]
+                        for candidate in discovered_urls:
+                            endpoint_sources.setdefault(candidate, []).append("ffuf")
+                        endpoints = list(dict.fromkeys(
+                            endpoints + discovered_urls))[:spec.options.endpoint_limit]
+                        job["endpoints"] = endpoints[1:]
                     if module == "arjun":
                         job["parameters"] = [
                             item for item in result.get("parameters", [])

@@ -39,3 +39,4 @@ DALFOX_TIMEOUT_SECONDS = 65
 # Wait briefly for ZAP to drain its asynchronous passive-scan queue before reading alerts.
 ZAP_PASSIVE_POLL_LIMIT = 12
 ZAP_PASSIVE_POLL_SECONDS = 0.5
+\n# One GAU archive source is selected at a time; change after validating availability.\nGAU_PROVIDER = "wayback"\n

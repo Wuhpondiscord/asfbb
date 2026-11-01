@@ -32,6 +32,20 @@ def command(module, url, host):
                 "--smart", "--disable-coloring"]
     raise ValueError("Unsupported review module")
 
+def ffuf_discoveries(lines, host):
+    """Only preserve directly observed same-host success responses as URLs."""
+    found = []
+    for line in lines:
+        try:
+            item = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if (isinstance(item, dict) and item.get("status") in (200, 201, 202, 204)
+                and isinstance(item.get("url"), str) and in_host(item["url"], host)):
+            found.append(item["url"])
+    return list(dict.fromkeys(found))[:100]
+
+
 def summarize_review(module, lines):
     if module == "ffuf":
         results = []
@@ -101,6 +115,7 @@ async def review(module, url, host):
             status = "partial"
     return {"source": module, "status": status, "target": url,
             "parameters": parameters,
+            "endpoints": ffuf_discoveries(lines, host) if module == "ffuf" else [],
             "output": summarize_review(module, lines),
             "reason": (" | ".join(line[:180] for line in lines if line.startswith("[stderr]") or line.startswith("[diagnostic]")) or ("Dalfox returned a nonzero exit with unverified findings; runtime verification required" if has_evidence and status in ("partial", "findings") else (f"{module} returned an unsuccessful exit status; inspect captured output" if status == "failed" else "")))[:500],
             "note": "Unverified tool output. Confirm impact manually before reporting."}
