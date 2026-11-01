@@ -35,3 +35,7 @@ GAU_BREAKER_COOLDOWN_SECONDS = 900
 # Individual review deadlines, separate from the short generic process deadline.
 ARJUN_TIMEOUT_SECONDS = 85
 DALFOX_TIMEOUT_SECONDS = 65
+
+# Wait briefly for ZAP to drain its asynchronous passive-scan queue before reading alerts.
+ZAP_PASSIVE_POLL_LIMIT = 12
+ZAP_PASSIVE_POLL_SECONDS = 0.5

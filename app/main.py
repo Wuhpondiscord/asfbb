@@ -353,8 +353,14 @@ async def worker():
                                     job["error"] = "Target fetch failed: " + exc.__class__.__name__
                                     break
                                 await asyncio.sleep(spec.delay_seconds)
+                    pending_records = 0
                     async with httpx.AsyncClient(timeout=20, trust_env=False) as z:
-                        await asyncio.sleep(2)
+                        for _ in range(config.ZAP_PASSIVE_POLL_LIMIT):
+                            queue_info = await zap_call(z, "pscan", "view/recordsToScan", {})
+                            pending_records = int(queue_info.get("recordsToScan", 0))
+                            if pending_records <= 0:
+                                break
+                            await asyncio.sleep(config.ZAP_PASSIVE_POLL_SECONDS)
                         info = await zap_call(z, "core", "view/alerts",
                                               {"baseurl": url, "start": "0", "count": "100"})
                     job["alerts"].extend([{
@@ -363,13 +369,23 @@ async def worker():
                         "description": (a.get("description") or "")[:1000]
                     } for a in info.get("alerts", [])
                       if urlsplit(a.get("url") or "").hostname == host])
-                    result = {"status": "completed"}
+                    result = {
+                        "status": "completed" if pending_records <= 0 else "partial",
+                        "reason": (f"ZAP passive scan still has {pending_records} pending records"
+                                   if pending_records else ""),
+                        "pending_records": pending_records,
+                    }
                 elif module == "nuclei":
                     result = await nuclei(url, host, spec.user_agent)
                     job["alerts"].extend(result["alerts"])
                 elif module in ACTIVE_MODULES:
                     result = await review(module, url, host)
                     job["reviews"].append(result)
+                    if module == "arjun":
+                        job["parameters"] = [
+                            item for item in result.get("parameters", [])
+                            if in_host(item.get("url", ""), host)
+                        ]
                 job["pipeline"][module] = result["status"]
                 summary = str(result.get("output") or "")
                 if not summary:
@@ -377,8 +393,9 @@ async def worker():
                                " endpoints; " + str(len(result.get("probes", []))) +
                                " probes; " + str(len(result.get("alerts", []))) + " module alerts")
                 if module == "zap-passive":
-                    summary = ("ZAP fetched " + str(job["request_count"]) +
-                               " URLs/requests; " + str(len(job["alerts"])) + " total alerts")
+                    summary = ("ZAP-proxied requests: " + str(job["request_count"]) +
+                               "; alerts: " + str(len(job["alerts"])) +
+                               "; queued passive records: " + str(result["pending_records"]))
                 summary = summary[:1200]
                 elapsed_ms = round((time.monotonic() - started_at) * 1000)
                 job.setdefault("stage_details", {})[module] = {"status": result["status"], "elapsed_ms": elapsed_ms, "reason": str(result.get("reason", ""))[:250], "summary": summary}
@@ -386,7 +403,7 @@ async def worker():
                 job["endpoint_sources"] = {key: sorted(set(value)) for key, value in endpoint_sources.items() if key in endpoints}
                 job["progress"] = round((position + 1) * 100 / len(spec.modules))
             stage_statuses = list(job["pipeline"].values())
-            degraded = any(status in ("failed", "timeout", "unavailable") for status in stage_statuses)
+            degraded = any(status in ("failed", "timeout", "unavailable", "partial") for status in stage_statuses)
             job["status"] = "cancelled" if job["cancelled"] else ("partial" if degraded else "completed")
             job["stage"] = job["status"]
             log_event(job, "finished", status=job["status"])
