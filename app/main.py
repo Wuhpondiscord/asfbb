@@ -7,7 +7,7 @@ from threading import Lock
 from urllib.parse import urlsplit
 
 import httpx
-from fastapi import FastAPI, File, Header, HTTPException, UploadFile, Depends
+from fastapi import FastAPI, File, Header, HTTPException, UploadFile, Depends, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -25,8 +25,20 @@ jobs = {}
 queue = asyncio.Queue()
 zap_lock = Lock()
 
-def authorize():
-    return True
+sessions = set()
+@app.middleware("http")
+async def session_middleware(request: Request, call_next):
+    old = request.cookies.get("asfb_session")
+    sid = old if old in sessions else secrets.token_urlsafe(32)
+    sessions.add(sid)
+    request.state.sid = sid
+    response = await call_next(request)
+    if sid != old:
+        response.set_cookie("asfb_session", sid, httponly=True, secure=request.url.scheme == "https", samesite="strict", max_age=86400)
+    return response
+
+def authorize(request: Request):
+    return request.state.sid
 
 class Account(BaseModel):
     name: str = Field(min_length=1, max_length=100)
@@ -47,8 +59,7 @@ class ScanRequest(BaseModel):
 async def startup():
     if not ZAP_KEY:
         raise RuntimeError("Internal ZAP key missing")
-    assets.update(storage.load("assets"))
-    jobs.update(storage.load("jobs"))
+    # Public browser sessions and secrets are not reloaded from disk.
     for job in jobs.values():
         if job["status"] in ("queued", "running"): job["status"] = "interrupted"
     app.state.worker = asyncio.create_task(worker())
@@ -66,7 +77,7 @@ async def health():
     return {"status": "ok", "zap": bool(ZAP_KEY)}
 
 @app.post("/api/import", dependencies=[Depends(authorize)])
-async def import_file(file: UploadFile = File(...)):
+async def import_file(request: Request, file: UploadFile = File(...)):
     blob = await file.read(2_000_001)
     try:
         rows = parse_csv(blob)
@@ -75,13 +86,14 @@ async def import_file(file: UploadFile = File(...)):
     prefix = str(uuid.uuid4())[:8]
     for r in rows:
         r["id"] = prefix + "-" + r["id"]
+        r["owner"] = request.state.sid
         assets[r["id"]] = r
-    storage.save("assets", assets)
+    # Keep public browser data ephemeral.
     return {"imported": len(rows), "web": sum(r["compatibility"] == "web" for r in rows)}
 
 @app.get("/api/assets", dependencies=[Depends(authorize)])
-def list_assets(bounty_only: bool = False, severity: str = "all", compatible_only: bool = False, search: str = "", max_reports: int | None = None):
-    rows = list(assets.values())
+def list_assets(request: Request, bounty_only: bool = False, severity: str = "all", compatible_only: bool = False, search: str = "", max_reports: int | None = None):
+    rows = [a for a in assets.values() if a.get("owner") == request.state.sid]
     if bounty_only:
         rows = [r for r in rows if r["bounty"]]
     if severity != "all":
@@ -97,7 +109,7 @@ def list_assets(bounty_only: bool = False, severity: str = "all", compatible_onl
     return {"total": len(rows), "assets": rows}
 
 @app.post("/api/accounts", dependencies=[Depends(authorize)])
-def add_account(account: Account):
+def add_account(account: Account, request: Request):
     h = account.host.lower().rstrip(".")
     if urlsplit("https://" + h).hostname != h or any(c in h for c in "/:@*"):
         raise HTTPException(422, "Account must specify a single hostname")
@@ -107,19 +119,22 @@ def add_account(account: Account):
     identifier = uuid.uuid4().hex
     accounts[identifier] = account.model_dump() if hasattr(account, "model_dump") else account.dict()
     accounts[identifier]["host"] = h
+    accounts[identifier]["owner"] = request.state.sid
     return {"id": identifier, "name": account.name, "host": h}
 
 @app.get("/api/accounts", dependencies=[Depends(authorize)])
-def list_accounts():
-    return [{"id": k, "name": v["name"], "host": v["host"]} for k, v in accounts.items()]
+def list_accounts(request: Request):
+    return [{"id": k, "name": v["name"], "host": v["host"]} for k, v in accounts.items() if v.get("owner") == request.state.sid]
 
 @app.delete("/api/accounts/{account_id}", dependencies=[Depends(authorize)])
-def remove_account(account_id: str):
+def remove_account(account_id: str, request: Request):
+    if account_id in accounts and accounts[account_id].get("owner") != request.state.sid:
+        raise HTTPException(404, "Account not found")
     accounts.pop(account_id, None)
     return {"removed": True}
 
 @app.post("/api/scans", dependencies=[Depends(authorize)])
-async def create_scan(spec: ScanRequest):
+async def create_scan(spec: ScanRequest, request: Request):
     if spec.modules != ["zap-passive"]:
         raise HTTPException(422, "Only passive scanning is currently supported")
     if queue.qsize() >= 100:
@@ -127,7 +142,7 @@ async def create_scan(spec: ScanRequest):
     if not spec.policy_confirmed:
         raise HTTPException(422, "You must explicitly confirm program automation policy")
     item = assets.get(spec.asset_id)
-    if not item:
+    if not item or item.get("owner") != request.state.sid:
         raise HTTPException(404, "Asset not found")
     try:
         url, host = target_url(item)
@@ -136,13 +151,13 @@ async def create_scan(spec: ScanRequest):
         raise HTTPException(422, str(exc))
     if spec.account_id:
         profile = accounts.get(spec.account_id)
-        if not profile or profile["host"] != host:
+        if not profile or profile["host"] != host or profile.get("owner") != request.state.sid:
             raise HTTPException(422, "Account profile not found or host mismatch")
     identifier = uuid.uuid4().hex
-    jobs[identifier] = {"id": identifier, "asset_id": spec.asset_id, "target": url,
+    jobs[identifier] = {"owner": request.state.sid, "id": identifier, "asset_id": spec.asset_id, "target": url,
                         "status": "queued", "alerts": [], "error": None, "created": time.time(),
                         "request_count": 0, "cancelled": False}
-    storage.save("jobs", {identifier: jobs[identifier]})
+    # Public scan results are ephemeral.
     await queue.put((identifier, spec))
     return {"id": identifier, "status": "queued"}
 
@@ -153,14 +168,14 @@ class BatchRequest(BaseModel):
     delay_seconds: float = Field(default=1.5, ge=1, le=30)
 
 @app.post("/api/scans/batch", dependencies=[Depends(authorize)])
-async def batch_scans(payload: BatchRequest):
+async def batch_scans(payload: BatchRequest, request: Request):
     if not payload.policy_confirmed:
         raise HTTPException(422, "Program policy confirmation is required")
     if len(set(payload.asset_ids)) != len(payload.asset_ids) or queue.qsize() + len(payload.asset_ids) > 100:
         raise HTTPException(422, "Duplicate assets or queue capacity exceeded")
     for asset_id in payload.asset_ids:
         item = assets.get(asset_id)
-        if item is None:
+        if item is None or item.get("owner") != request.state.sid:
             raise HTTPException(404, f"Asset not found: {asset_id}")
         try:
             _, host = target_url(item)
@@ -170,7 +185,7 @@ async def batch_scans(payload: BatchRequest):
     result = []
     for asset_id in payload.asset_ids:
         result.append(await create_scan(ScanRequest(asset_id=asset_id, policy_confirmed=True, user_agent=payload.user_agent,
-                                                    delay_seconds=payload.delay_seconds)))
+                                                    delay_seconds=payload.delay_seconds), request))
     return {"queued": len(result), "scans": result}
 
 class JWTInput(BaseModel):
@@ -184,21 +199,21 @@ def jwt_inspect(payload: JWTInput):
         raise HTTPException(422, str(exc))
 
 @app.get("/api/scans", dependencies=[Depends(authorize)])
-def scan_list():
-    return list(jobs.values())[-100:]
+def scan_list(request: Request):
+    return [v for v in jobs.values() if v.get("owner") == request.state.sid][-100:]
 
 @app.get("/api/scans/{scan_id}", dependencies=[Depends(authorize)])
-def scan_status(scan_id: str):
-    if scan_id not in jobs:
+def scan_status(scan_id: str, request: Request):
+    if scan_id not in jobs or jobs[scan_id].get("owner") != request.state.sid:
         raise HTTPException(404, "Scan not found")
     return jobs[scan_id]
 
 @app.post("/api/scans/{scan_id}/cancel", dependencies=[Depends(authorize)])
-def cancel_scan(scan_id: str):
-    if scan_id not in jobs:
+def cancel_scan(scan_id: str, request: Request):
+    if scan_id not in jobs or jobs[scan_id].get("owner") != request.state.sid:
         raise HTTPException(404, "Scan not found")
     jobs[scan_id]["cancelled"] = True
-    storage.save("jobs", {scan_id: jobs[scan_id]})
+    # Ephemeral data
     return {"cancel_requested": True}
 
 async def zap_call(client, component, action, params=None):
@@ -261,5 +276,5 @@ async def worker():
             job["error"] = str(exc)[:250]
         finally:
             # Never retain authenticated headers in logs or job history.
-            storage.save("jobs", {identifier: job})
+            # Ephemeral data
             queue.task_done()
