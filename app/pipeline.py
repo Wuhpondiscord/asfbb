@@ -87,7 +87,10 @@ async def nuclei(url, host, agent, urls=None, default_ids=None,
         import yaml
         estimated_per_url = 0
         for template in templates:
-            with open(template, encoding="utf-8") as source:
+            # Docker deploys to /app/app; offline CI runs from the checkout.
+            local_path = template if os.path.isfile(template) else os.path.join(
+                os.path.dirname(__file__), "nuclei-templates", os.path.basename(template))
+            with open(local_path, encoding="utf-8") as source:
                 document = yaml.safe_load(source) or {}
             requests = document.get("http", []) if isinstance(document, dict) else []
             estimated_per_url += sum(max(1, len(req.get("path", [])))
