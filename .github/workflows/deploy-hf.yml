@@ -22,7 +22,7 @@ jobs:
           ZAP_API_KEY: test-key
         run: python3 -m pytest -q tests/
       - name: Validate Python backend syntax
-        run: python3 -m py_compile app/main.py app/pipeline.py app/scope.py app/jwtcheck.py app/storage.py
+        run: python3 -m py_compile app/main.py app/pipeline.py app/review.py app/scope.py app/jwtcheck.py app/storage.py
       - name: Validate dashboard JavaScript syntax
         run: |
           python3 - <<'PY'
