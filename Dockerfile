@@ -5,7 +5,7 @@ RUN curl -fsSL -o /tmp/k.zip https://github.com/projectdiscovery/katana/releases
 RUN curl -fsSL -o /tmp/h.zip https://github.com/projectdiscovery/httpx/releases/download/v1.12.0/httpx_1.12.0_linux_amd64.zip && unzip -oq /tmp/h.zip httpx -d /usr/local/bin
 RUN curl -fsSL -o /tmp/g.tar.gz https://github.com/lc/gau/releases/download/v2.2.4/gau_2.2.4_linux_amd64.tar.gz && tar -xzf /tmp/g.tar.gz -C /usr/local/bin gau
 RUN curl -fsSL -o /tmp/f.tar.gz https://github.com/ffuf/ffuf/releases/download/v2.3.0/ffuf_2.3.0_linux_amd64.tar.gz && tar -xzf /tmp/f.tar.gz -C /usr/local/bin ffuf
-RUN curl -fsSL -o /tmp/d.tar.gz https://github.com/hahwul/dalfox/releases/download/v3.2.4/dalfox-v3.2.4-linux-x86_64-musl.tar.gz && tar -xzf /tmp/d.tar.gz -C /usr/local/bin dalfox
+RUN curl -fsSL -o /tmp/d.tar.gz https://github.com/hahwul/dalfox/releases/download/v3.2.4/dalfox-v3.2.4-linux-x86_64-musl.tar.gz && mkdir -p /tmp/dalfox-package && tar -xzf /tmp/d.tar.gz -C /tmp/dalfox-package && DALFOX_BIN="$(find /tmp/dalfox-package -type f -name 'dalfox*' | head -n 1)" && test -n "$DALFOX_BIN" && install -m 0755 "$DALFOX_BIN" /usr/local/bin/dalfox
 RUN curl -fsSL -o /tmp/s.tar.gz https://github.com/sqlmapproject/sqlmap/archive/refs/tags/1.10.tar.gz && mkdir -p /opt/sqlmap && tar -xzf /tmp/s.tar.gz -C /opt/sqlmap --strip-components=1
 FROM zaproxy/zap-stable
 USER root
