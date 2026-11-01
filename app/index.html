@@ -57,17 +57,18 @@ async function scan(){
  try{
   let r;
   if(ids.length===1){
-   const body={asset_id:ids[0],policy_confirmed:true,user_agent:el('agent').value,max_requests:Number(el('requests').value),delay_seconds:Number(el('delay').value),account_id:el('account').value||null,modules:modules};
+   const body={asset_id:ids[0],policy_confirmed:true,user_agent:el('agent').value,max_requests:Number(el('requests').value),delay_seconds:Number(el('delay').value),account_id:el('account').value||null,modules:modules,options:pipelineOptions()};
    r=await api('/scans',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   }else{
    if(el('account').value)return message('Batch scans do not currently support an authenticated account. Choose Anonymous or scan one asset.',true);
-   const body={asset_ids:ids,policy_confirmed:true,user_agent:el('agent').value,delay_seconds:Number(el('delay').value),modules:modules};
+   const body={asset_ids:ids,policy_confirmed:true,user_agent:el('agent').value,delay_seconds:Number(el('delay').value),modules:modules,options:pipelineOptions()};
    r=await api('/scans/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   }
   for(const id of ids)selectedIds.delete(id);render();message('Queued '+ids.length+' scan'+(ids.length===1?'':'s')+'. '+selectedIds.size+' targets still selected.');await loadScans();
  }catch(e){message('Scan queue error: '+e.message,true)}
 }
 async function inspectJwt(){const token=el('jwt').value;try{const r=await api('/tools/jwt/inspect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token})});el('jwtResults').textContent=JSON.stringify(r,null,2);el('jwt').value=''}catch(e){el('jwtResults').textContent=e.message}}
+function pipelineOptions(){return {endpoint_limit:Number(el("settingsLimit").value),httpx_limit:Number(el("settingsHttpx").value),katana_depth:Number(el("settingsKatana").value)}}
 function applySettings(){
  const proposed=el('settingsOrder').value.trim();
  if(!proposed)return message('Enter the ordered modules.',true);
