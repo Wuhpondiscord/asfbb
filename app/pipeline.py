@@ -84,6 +84,22 @@ async def nuclei(url, host, agent, urls=None, default_ids=None,
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(content)
             templates.append(path)
+        import yaml
+        estimated_per_url = 0
+        for template in templates:
+            with open(template, encoding="utf-8") as source:
+                document = yaml.safe_load(source) or {}
+            requests = document.get("http", []) if isinstance(document, dict) else []
+            estimated_per_url += sum(max(1, len(req.get("path", [])))
+                                     for req in requests if isinstance(req, dict))
+        estimated_per_url = max(1, estimated_per_url)
+        # Keep the request volume bounded even if the user selects broad presets
+        # and multiple community/custom templates together.
+        max_targets = max(1, config.NUCLEI_MAX_REQUEST_BUDGET // estimated_per_url)
+        requested_targets = len(targets)
+        targets = targets[:max_targets]
+        with open(target_file, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(targets) + "\n")
         args = ["/usr/local/bin/nuclei", "-l", target_file]
         for template in templates:
             args.extend(["-t", template])
@@ -114,9 +130,17 @@ async def nuclei(url, host, agent, urls=None, default_ids=None,
         })
     diag = " | ".join(line[:180] for line in rows
                       if line.startswith(("[stderr]", "[diagnostic]")))
+    budget_limited = requested_targets > len(targets)
+    if budget_limited and status == "completed":
+        status = "partial"
+    if budget_limited:
+        diag = ("Template request budget limited coverage to " + str(len(targets)) +
+                " of " + str(requested_targets) + " scoped URLs. " + diag)
     return {"status": status, "alerts": findings[:config.NUCLEI_FINDINGS_LIMIT],
             "templates": (list(selected_ids) + list(blobs)),
-            "targets_checked": len(targets), "reason": diag[:500]}
+            "targets_checked": len(targets), "requested_targets": requested_targets,
+            "estimated_requests_per_target": estimated_per_url,
+            "reason": diag[:500]}
 
 _gau_failures = 0
 _gau_disabled_until = 0.0

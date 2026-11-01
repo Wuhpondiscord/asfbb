@@ -96,3 +96,6 @@ NUCLEI_DEFAULT_IDS = ("technology-headers", "hsts-missing", "csp-missing", "serv
 GAU_WAYBACK_DEADLINE_SECONDS = 25
 GAU_FALLBACK_BREAKER_FAILURES = 2
 GAU_FALLBACK_BREAKER_COOLDOWN_SECONDS = 900
+
+# Maximum estimated HTTP requests for all selected Nuclei templates per job.
+NUCLEI_MAX_REQUEST_BUDGET = 60
