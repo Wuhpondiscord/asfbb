@@ -1,0 +1,28 @@
+id: asfb-csp-missing
+info:
+  name: HTML response missing CSP header
+  author: asfb
+  severity: info
+  description: This HTML response does not advertise a Content-Security-Policy header. It does not establish XSS.
+  tags: headers,misconfig
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: header
+        words:
+          - "text/html"
+        case-insensitive: true
+      - type: word
+        part: header
+        words:
+          - "content-security-policy:"
+        case-insensitive: true
+        negative: true

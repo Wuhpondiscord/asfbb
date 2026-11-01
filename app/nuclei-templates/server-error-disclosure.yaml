@@ -1,0 +1,17 @@
+id: asfb-server-error-disclosure
+info:
+  name: Possible framework exception disclosure
+  author: asfb
+  severity: info
+  description: Framework error markers may appear in the response. Verify the context and impact manually.
+  tags: errors,exposure
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: regex
+        part: body
+        regex:
+          - '(?i)(Traceback \(most recent call last\):|Fatal error: Uncaught|Exception in thread|org\.springframework\.[A-Za-z]+Exception)'

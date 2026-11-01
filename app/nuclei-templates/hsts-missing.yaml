@@ -1,0 +1,23 @@
+id: asfb-hsts-missing
+info:
+  name: Missing HSTS response header on HTTPS
+  author: asfb
+  severity: info
+  description: HTTPS response does not advertise HSTS. This is an informational security-hardening observation.
+  tags: headers,misconfig
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: header
+        words:
+          - "strict-transport-security:"
+        case-insensitive: true
+        negative: true
