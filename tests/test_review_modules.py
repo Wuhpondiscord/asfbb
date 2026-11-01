@@ -33,6 +33,7 @@ def test_review_output_is_unverified():
 def test_pipeline_option_validation():
     assert PipelineOptions(endpoint_limit=10, httpx_limit=3).endpoint_limit == 10
     with pytest.raises(ValueError):
-        PipelineOptions(endpoint_limit=1000)
+        PipelineOptions(endpoint_limit=2001)
+    assert PipelineOptions(endpoint_limit=1000).endpoint_limit == 1000
     assert ScanRequest(asset_id="test").active_confirmed is False
     assert BatchRequest(asset_ids=["a"]).modules == ["zap-passive"]

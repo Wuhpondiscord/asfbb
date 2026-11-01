@@ -61,7 +61,7 @@ async def gau(url, host):
     rows, status = await execute(["/usr/local/bin/gau", "--threads", "1", "--timeout", "8",
         "--retries", "0", "--providers", "wayback", host], 25)
     return {"status": status, "endpoints": list(dict.fromkeys(
-        value.strip() for value in rows if in_host(value.strip(), host)))[:100]}
+        value.strip() for value in rows if in_host(value.strip(), host)))[:100], "reason": " | ".join(x for x in rows if x.startswith("[diagnostic]") or x.startswith("[stderr]"))[:350]}
 
 async def probe(urls, host, agent, limit=1):
     # Header-only non-intrusive metadata probe. URLs are limited to the selected host.
