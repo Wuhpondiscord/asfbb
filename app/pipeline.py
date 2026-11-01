@@ -48,3 +48,32 @@ async def nuclei(url, host, agent):
                          "description": str(info.get("description") or "")[:1000],
                          "source": "nuclei", "template_id": obj.get("template-id")})
     return {"status": status, "alerts": findings[:100]}
+
+async def gau(url, host):
+    rows, status = await execute(["/usr/local/bin/gau", "--threads", "1", "--timeout", "15",
+        "--subs", "false", host], 55)
+    return {"status": status, "endpoints": list(dict.fromkeys(
+        value.strip() for value in rows if in_host(value.strip(), host)))[:100]}
+
+async def probe(urls, host, agent):
+    # Header-only non-intrusive metadata probe. URLs are limited to the selected host.
+    targets = list(dict.fromkeys(u for u in urls if in_host(u, host)))[:10]
+    if not targets:
+        return {"status": "completed", "probes": []}
+    args = ["/usr/local/bin/pd-httpx", "-u", targets[0], "-json", "-silent",
+            "-rl", "1", "-threads", "1", "-timeout", "8", "-retries", "0",
+            "-H", "User-Agent: " + agent, "-no-color"]
+    rows, status = await execute(args, 30)
+    probes = []
+    for line in rows:
+        try:
+            item = json.loads(line)
+            found = item.get("url", "")
+            if in_host(found, host):
+                probes.append({"url": found, "status_code": item.get("status_code"),
+                               "title": str(item.get("title") or "")[:160],
+                               "webserver": str(item.get("webserver") or "")[:120],
+                               "source": "httpx"})
+        except ValueError:
+            continue
+    return {"status": status, "probes": probes[:10]}

@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from .scope import LEVELS, parse_csv, public_host, target_url
 from . import storage
 from .jwtcheck import inspect_jwt
-from .pipeline import katana, nuclei
+from .pipeline import katana, nuclei, gau, probe
 
 
 ZAP_KEY = os.environ.get("ZAP_API_KEY", "")
@@ -143,7 +143,7 @@ def remove_account(account_id: str, request: Request):
 
 @app.post("/api/scans", dependencies=[Depends(authorize)])
 async def create_scan(spec: ScanRequest, request: Request):
-    if not spec.modules or not set(spec.modules).issubset({"zap-passive","katana","nuclei"}):
+    if not spec.modules or len(spec.modules) != len(set(spec.modules)) or not set(spec.modules).issubset({"zap-passive","katana","nuclei","gau","httpx"}):
         raise HTTPException(422, "Only passive scanning is currently supported")
     if queue.qsize() >= 1000:
         raise HTTPException(429, "Scan queue full")
@@ -164,7 +164,7 @@ async def create_scan(spec: ScanRequest, request: Request):
     identifier = uuid.uuid4().hex
     jobs[identifier] = {"owner": request.state.sid, "id": identifier, "asset_id": spec.asset_id, "target": url,
                         "status": "queued", "alerts": [], "error": None, "created": time.time(),
-                        "request_count": 0, "cancelled": False, "modules": spec.modules, "endpoints": [], "pipeline": {}, "progress": 0, "stage": "queued"}
+                        "request_count": 0, "cancelled": False, "modules": spec.modules, "endpoints": [], "pipeline": {}, "probes": [], "progress": 0, "stage": "queued"}
     # Public scan results are ephemeral.
     await queue.put((identifier, spec))
     return {"id": identifier, "status": "queued"}
@@ -259,69 +259,74 @@ async def worker():
                 job["status"] = "cancelled"
                 continue
             job["status"] = "running"
-            job["progress"] = 3
-            job["stage"] = "validation"
             url, host = target_url(assets[spec.asset_id])
-            profile = accounts.get(spec.account_id) if spec.account_id else None
-            headers = {"User-Agent": spec.user_agent}
-            if profile:
-                headers.update(profile["headers"])
-                if profile["cookie"]:
-                    headers["Cookie"] = profile["cookie"]
-            job["progress"] = 10
-            job["stage"] = "discovery"
-            if "katana" in spec.modules and not job["cancelled"]:
-                result = await katana(url, host, spec.user_agent)
-                job["endpoints"] = result["endpoints"]
-                job["pipeline"]["katana"] = result["status"]
-            job["progress"] = 40
-            job["stage"] = "zap-passive"
-            # Every job uses ZAP's HTTP proxy to populate passive alerts. No active scanning.
-            async with httpx.AsyncClient(timeout=15, follow_redirects=False, trust_env=False,
-                                         proxy=ZAP_URL, verify=False) as client:
-                for i in range(spec.max_requests if "zap-passive" in spec.modules else 0):
-                    if job["cancelled"]:
-                        break
-                    # Re-check every request, including DNS answers. Egress firewall is still recommended.
-                    public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
-                    try:
-                        response = await client.get(url, headers=headers)
-                        job["request_count"] += 1
-                        job["last_status"] = response.status_code
-                    except httpx.HTTPError as exc:
-                        job["error"] = f"Target fetch failed: {exc.__class__.__name__}"
-                        break
-                    if i + 1 < spec.max_requests:
-                        await asyncio.sleep(spec.delay_seconds)
-            if job["cancelled"]:
-                job["status"] = "cancelled"
-                continue
-            if "zap-passive" in spec.modules:
-              async with httpx.AsyncClient(timeout=20, trust_env=False) as z:
-                  await asyncio.sleep(2)
-                  # Filter results strictly to the requested URL/host, because ZAP session is shared.
-                  info = await zap_call(z, "core", "view/alerts", {"baseurl": url, "start": "0", "count": "100"})
-                  alerts = info.get("alerts", [])
-                  job["alerts"] = [{
-                      "source": "zap",
-                      "name": a.get("name"), "risk": a.get("risk"),
-                      "confidence": a.get("confidence"), "url": a.get("url"),
-                      "description": (a.get("description") or "")[:1000]
-                  } for a in alerts if urlsplit(a.get("url") or "").hostname == host]
-            job["progress"] = 72
-            job["stage"] = "nuclei"
-            if "nuclei" in spec.modules and not job["cancelled"]:
-                result = await nuclei(url, host, spec.user_agent)
-                job["alerts"].extend(result["alerts"])
-                job["pipeline"]["nuclei"] = result["status"]
-            job["status"] = "completed"
-            job["progress"] = 100
-            job["stage"] = "complete"
+            endpoints = [url]
+            # Modules execute in the user-selected order, sequentially, with bounded output.
+            for position, module in enumerate(spec.modules):
+                if job["cancelled"]:
+                    break
+                public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
+                job["stage"] = module
+                job["progress"] = round(position * 100 / len(spec.modules))
+                job["pipeline"][module] = "running"
+                if module == "gau":
+                    result = await gau(url, host)
+                    endpoints = list(dict.fromkeys(endpoints + result["endpoints"]))[:100]
+                    job["endpoints"] = endpoints[1:]
+                elif module == "katana":
+                    result = await katana(url, host, spec.user_agent)
+                    endpoints = list(dict.fromkeys(endpoints + result["endpoints"]))[:100]
+                    job["endpoints"] = endpoints[1:]
+                elif module == "httpx":
+                    result = await probe(endpoints, host, spec.user_agent)
+                    job["probes"] = result["probes"]
+                elif module == "zap-passive":
+                    # Only the primary target is fetched through ZAP. Additional
+                    # discovered URLs are not automatically crawled by ZAP.
+                    headers = {"User-Agent": spec.user_agent}
+                    profile = accounts.get(spec.account_id) if spec.account_id else None
+                    if profile:
+                        headers.update(profile["headers"])
+                        if profile["cookie"]:
+                            headers["Cookie"] = profile["cookie"]
+                    async with httpx.AsyncClient(timeout=15, follow_redirects=False,
+                                                 trust_env=False, proxy=ZAP_URL, verify=False) as client:
+                        for i in range(spec.max_requests):
+                            if job["cancelled"]:
+                                break
+                            public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
+                            try:
+                                response = await client.get(url, headers=headers)
+                                job["request_count"] += 1
+                                job["last_status"] = response.status_code
+                            except httpx.HTTPError as exc:
+                                job["error"] = "Target fetch failed: " + exc.__class__.__name__
+                                break
+                            if i + 1 < spec.max_requests:
+                                await asyncio.sleep(spec.delay_seconds)
+                    async with httpx.AsyncClient(timeout=20, trust_env=False) as z:
+                        await asyncio.sleep(2)
+                        info = await zap_call(z, "core", "view/alerts",
+                                              {"baseurl": url, "start": "0", "count": "100"})
+                    job["alerts"].extend([{
+                        "source": "zap", "name": a.get("name"), "risk": a.get("risk"),
+                        "confidence": a.get("confidence"), "url": a.get("url"),
+                        "description": (a.get("description") or "")[:1000]
+                    } for a in info.get("alerts", [])
+                      if urlsplit(a.get("url") or "").hostname == host])
+                    result = {"status": "completed"}
+                elif module == "nuclei":
+                    result = await nuclei(url, host, spec.user_agent)
+                    job["alerts"].extend(result["alerts"])
+                job["pipeline"][module] = result["status"]
+                job["progress"] = round((position + 1) * 100 / len(spec.modules))
+            job["status"] = "cancelled" if job["cancelled"] else "completed"
+            job["stage"] = job["status"]
+            if job["status"] == "completed":
+                job["progress"] = 100
         except Exception as exc:
             job["status"] = "failed"
             job["stage"] = "failed"
             job["error"] = str(exc)[:250]
         finally:
-            # Never retain authenticated headers in logs or job history.
-            # Ephemeral data
             queue.task_done()
