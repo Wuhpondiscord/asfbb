@@ -46,7 +46,7 @@ GAU_PROVIDER = "otx"
 PROCESS_OUTPUT_MAX_LINES = 5000
 
 # GAU: fallback providers are queried when Wayback has no successful URL response.
-GAU_FALLBACK_PROVIDERS = ("commoncrawl",)
+GAU_FALLBACK_PROVIDERS = ("commoncrawl", "urlscan")
 # Wayback is opt-in until its availability recovers.
 GAU_ENABLE_WAYBACK = False
 GAU_PROVIDER_DEADLINE_SECONDS = 12
@@ -91,3 +91,8 @@ NUCLEI_OPTIONAL_TEMPLATE_PATHS = {
 }
 
 NUCLEI_DEFAULT_IDS = ("technology-headers", "hsts-missing", "csp-missing", "server-error-disclosure")
+
+# Archive providers can have intermittent outages; avoid repeated slow calls.
+GAU_WAYBACK_DEADLINE_SECONDS = 25
+GAU_FALLBACK_BREAKER_FAILURES = 2
+GAU_FALLBACK_BREAKER_COOLDOWN_SECONDS = 900

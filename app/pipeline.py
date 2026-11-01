@@ -120,35 +120,46 @@ async def nuclei(url, host, agent, urls=None, default_ids=None,
 
 _gau_failures = 0
 _gau_disabled_until = 0.0
+_gau_provider_failures = {}
+_gau_provider_disabled_until = {}
 
 async def gau(url, host, limit=None):
-    """Query isolated archive providers and report partial provider coverage."""
+    """Query bounded archives with independent provider cooldown and transparent coverage."""
     global _gau_failures, _gau_disabled_until
     maximum = max(1, min(int(limit or config.ENDPOINT_LIMIT_DEFAULT), config.ENDPOINT_LIMIT_MAX))
     providers = (config.GAU_PROVIDER,) + tuple(config.GAU_FALLBACK_PROVIDERS)
+    providers = tuple(p for p in providers if p != "wayback" or config.GAU_ENABLE_WAYBACK)
     if config.GAU_ENABLE_WAYBACK and "wayback" not in providers:
         providers += ("wayback",)
-    collected = []
-    provider_results = []
-    now = time.monotonic()
+    collected, provider_results = [], []
     for provider in dict.fromkeys(providers):
-        if provider == config.GAU_PROVIDER and now < _gau_disabled_until:
-            provider_results.append({"provider": provider, "status": "unavailable",
-                                     "reason": "Circuit breaker cooldown"})
+        now = time.monotonic()
+        is_primary = provider == config.GAU_PROVIDER
+        disabled_until = (_gau_disabled_until if is_primary
+                          else _gau_provider_disabled_until.get(provider, 0.0))
+        if now < disabled_until:
+            provider_results.append({
+                "provider": provider, "status": "unavailable",
+                "urls": 0, "reason": "Circuit breaker cooldown",
+                "cooldown_seconds": round(disabled_until - now)})
             continue
+        deadline = (config.GAU_WAYBACK_DEADLINE_SECONDS if provider == "wayback"
+                    else config.GAU_PROVIDER_DEADLINE_SECONDS)
         args = ["/usr/local/bin/gau", "--threads", "1",
                 "--timeout", str(config.GAU_HTTP_TIMEOUT_SECONDS),
                 "--retries", "0", "--providers", provider, host]
-        rows, status = await execute(args, config.GAU_PROVIDER_DEADLINE_SECONDS)
+        rows, status = await execute(args, deadline)
         urls = [value.strip() for value in rows
                 if isinstance(value, str) and in_host(value.strip(), host)]
         collected.extend(urls)
         diagnostics = " | ".join(value[:180] for value in rows
                                  if value.startswith(("[stderr]", "[diagnostic]")))
         provider_results.append({"provider": provider, "status": status,
-                                 "urls": len(urls), "reason": diagnostics[:300]})
-        if provider == config.GAU_PROVIDER:
-            if status in ("timeout", "failed", "unavailable"):
+                                 "urls": len(urls), "reason": diagnostics[:300],
+                                 "deadline_seconds": deadline})
+        failed = status in ("timeout", "failed", "unavailable")
+        if is_primary:
+            if failed:
                 _gau_failures += 1
                 if _gau_failures >= config.GAU_BREAKER_FAILURES:
                     _gau_disabled_until = time.monotonic() + config.GAU_BREAKER_COOLDOWN_SECONDS
@@ -156,13 +167,26 @@ async def gau(url, host, limit=None):
             else:
                 _gau_failures = 0
                 _gau_disabled_until = 0.0
+        else:
+            if failed:
+                count = _gau_provider_failures.get(provider, 0) + 1
+                if count >= config.GAU_FALLBACK_BREAKER_FAILURES:
+                    _gau_provider_disabled_until[provider] = (
+                        time.monotonic() + config.GAU_FALLBACK_BREAKER_COOLDOWN_SECONDS)
+                    _gau_provider_failures[provider] = 0
+                else:
+                    _gau_provider_failures[provider] = count
+            else:
+                _gau_provider_failures.pop(provider, None)
+                _gau_provider_disabled_until.pop(provider, None)
         if status == "completed" and urls and not config.GAU_AGGREGATE_ALL_PROVIDERS:
             break
     unique = list(dict.fromkeys(collected))[:maximum]
     statuses = [item["status"] for item in provider_results]
+    successes = [item for item in provider_results if item["status"] == "completed"]
     if statuses and all(s == "completed" for s in statuses):
         final_status = "completed"
-    elif unique or any(s == "completed" for s in statuses):
+    elif unique or successes:
         final_status = "partial"
     elif "timeout" in statuses:
         final_status = "timeout"
@@ -173,9 +197,14 @@ async def gau(url, host, limit=None):
     problems = [f'{item["provider"]}: {item["status"]}' +
                 (f' ({item.get("reason")})' if item.get("reason") else "")
                 for item in provider_results if item["status"] != "completed"]
-    return {"status": final_status, "endpoints": unique, "providers": provider_results,
-            "reason": " | ".join(problems)[:500],
-            "summary": f"Archive sources: {len(provider_results)}; scoped URLs: {len(unique)}"}
+    return {
+        "status": final_status, "endpoints": unique, "providers": provider_results,
+        "coverage": ("full" if not problems else "degraded" if successes else "unavailable"),
+        "reason": " | ".join(problems)[:500],
+        "summary": f"Archive providers attempted: {len(provider_results)}; "
+                   f"successful: {len(successes)}; scoped URLs: {len(unique)}; "
+                   f"coverage: {'full' if not problems else 'degraded'}",
+    }
 
 async def probe(urls, host, agent, limit=1):
     """Probe exact-host URLs in bounded batches, avoiding one subprocess per URL."""
