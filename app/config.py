@@ -24,3 +24,6 @@ GAU_TIMEOUT_SECONDS = 25
 KATANA_TIMEOUT_SECONDS = 65
 NUCLEI_TIMEOUT_SECONDS = 90
 HTTPX_TIMEOUT_SECONDS = 30
+
+# Process batches are kept small so scans honor conservative per-host rates.
+HTTPX_BATCH_SIZE = 25

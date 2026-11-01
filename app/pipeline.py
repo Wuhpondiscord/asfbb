@@ -1,6 +1,8 @@
 import asyncio
 import json
 import re
+import os
+import tempfile
 from urllib.parse import urlsplit
 from . import config
 
@@ -69,29 +71,53 @@ async def gau(url, host):
         value.strip() for value in rows if in_host(value.strip(), host)))[:100], "reason": " | ".join(x for x in rows if x.startswith("[diagnostic]") or x.startswith("[stderr]"))[:350]}
 
 async def probe(urls, host, agent, limit=1):
-    # Header-only non-intrusive metadata probe. URLs are limited to the selected host.
-    targets = list(dict.fromkeys(u for u in urls if in_host(u, host)))[:max(1, min(int(limit), 100))]
+    """Probe exact-host URLs in bounded batches, avoiding one subprocess per URL."""
+    targets = list(dict.fromkeys(
+        u for u in urls if isinstance(u, str) and "\n" not in u and "\r" not in u
+        and in_host(u, host)))[:max(1, min(int(limit), config.HTTPX_LIMIT_MAX))]
     if not targets:
-        return {"status": "completed", "probes": []}
+        return {"status": "completed", "probes": [], "submitted": 0}
     all_rows = []
-    status = "completed"
-    for target in targets:
-        args = ["/usr/local/bin/pd-httpx", "-u", target, "-json", "-silent",
-            "-rl", "1", "-threads", "1", "-timeout", "8", "-retries", "0",
-            "-H", "User-Agent: " + agent, "-no-color"]
-        rows, stage_status = await execute(args, config.HTTPX_TIMEOUT_SECONDS)
-        all_rows.extend(rows)
-        if stage_status != "completed": status = stage_status
+    failures = []
+    for start in range(0, len(targets), config.HTTPX_BATCH_SIZE):
+        subset = targets[start:start + config.HTTPX_BATCH_SIZE]
+        path = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                                             prefix="asfb-httpx-", suffix=".txt",
+                                             delete=False) as handle:
+                path = handle.name
+                handle.write("\n".join(subset) + "\n")
+            args = ["/usr/local/bin/pd-httpx", "-l", path, "-json", "-silent",
+                    "-rl", "1", "-threads", "1", "-timeout", "8", "-retries", "0",
+                    "-H", "User-Agent: " + agent, "-no-color"]
+            rows, status = await execute(
+                args, config.HTTPX_TIMEOUT_SECONDS + len(subset) * 2)
+            all_rows.extend(rows)
+            if status != "completed":
+                failures.append(status)
+        finally:
+            if path is not None:
+                try:
+                    os.unlink(path)
+                except FileNotFoundError:
+                    pass
     probes = []
     for line in all_rows:
         try:
             item = json.loads(line)
-            found = item.get("url", "")
-            if in_host(found, host):
-                probes.append({"url": found, "status_code": item.get("status_code"),
-                               "title": str(item.get("title") or "")[:160],
-                               "webserver": str(item.get("webserver") or "")[:120],
-                               "source": "httpx"})
-        except ValueError:
+        except (ValueError, TypeError):
             continue
-    return {"status": status, "probes": probes[:100], "reason": " | ".join(x[:160] for x in all_rows if x.startswith("[diagnostic]") or x.startswith("[stderr]"))[:350]}
+        if not isinstance(item, dict):
+            continue
+        found = item.get("url", "")
+        if in_host(found, host):
+            probes.append({"url": found, "status_code": item.get("status_code"),
+                           "title": str(item.get("title") or "")[:160],
+                           "webserver": str(item.get("webserver") or "")[:120],
+                           "source": "httpx"})
+    reason = " | ".join(x[:160] for x in all_rows
+                        if x.startswith("[stderr]") or x.startswith("[diagnostic]"))[:350]
+    return {"status": failures[0] if failures else "completed",
+            "probes": probes[:config.HTTPX_LIMIT_MAX], "submitted": len(targets),
+            "reason": reason}
