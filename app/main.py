@@ -201,8 +201,8 @@ class BatchRequest(BaseModel):
 
 @app.post("/api/scans/batch", dependencies=[Depends(authorize)])
 async def batch_scans(payload: BatchRequest, request: Request):
-    if ACTIVE_MODULES.intersection(payload.modules) and (len(payload.asset_ids) > 5 or not payload.active_confirmed):
-        raise HTTPException(422, "Active review requires authorization and at most five targets")
+    if ACTIVE_MODULES.intersection(payload.modules) and (len(payload.asset_ids) > 30 or not payload.active_confirmed):
+        raise HTTPException(422, "Active review requires authorization and at most 30 targets")
     if not payload.policy_confirmed:
         raise HTTPException(422, "Program policy confirmation is required")
     if len(set(payload.asset_ids)) != len(payload.asset_ids) or queue.qsize() + len(payload.asset_ids) > 1000:
