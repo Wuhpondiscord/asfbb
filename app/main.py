@@ -28,11 +28,18 @@ zap_lock = Lock()
 sessions = set()
 @app.middleware("http")
 async def session_middleware(request: Request, call_next):
-    old = request.cookies.get("asfb_session")
+    old = request.headers.get("x-asfb-session") or request.cookies.get("asfb_session")
     sid = old if old in sessions else secrets.token_urlsafe(32)
     sessions.add(sid)
     request.state.sid = sid
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        origin = request.headers.get("origin")
+        if origin and urlsplit(origin).netloc != request.headers.get("host"):
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"detail": "Origin mismatch"}, status_code=403)
     response = await call_next(request)
+    response.headers["X-ASFB-Session"] = sid
+    response.headers["Cache-Control"] = "no-store"
     if sid != old:
         response.set_cookie("asfb_session", sid, httponly=True, secure=request.url.scheme == "https", samesite="strict", max_age=86400)
     return response
