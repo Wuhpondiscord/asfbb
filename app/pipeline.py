@@ -21,7 +21,7 @@ async def execute(args, timeout):
     except asyncio.TimeoutError:
         p.kill()
         out, err = await p.communicate()
-        lines = clean_output(out).splitlines()[:500]
+        lines = clean_output(out).splitlines()[:config.PROCESS_OUTPUT_MAX_LINES]
         lines += ["[stderr] " + line[:200] for line in clean_output(err).splitlines()[-8:]]
         lines.append("[diagnostic] Deadline exceeded after " + str(timeout) + " seconds; partial output retained")
         return lines, "timeout"
@@ -38,11 +38,11 @@ def in_host(url, host):
     except ValueError:
         return False
 
-async def katana(url, host, agent, depth=1):
+async def katana(url, host, agent, depth=1, limit=None):
     rows, status = await execute(["/usr/local/bin/katana", "-u", url, "-d", str(max(1,min(int(depth),5))), "-fs", "fqdn", "-c", "1",
         "-p", "1", "-rl", "1", "-ct", "30s", "-timeout", "8", "-retry", "0",
         "-H", "User-Agent: " + agent, "-silent", "-duc"], config.KATANA_TIMEOUT_SECONDS)
-    return {"status": status, "endpoints": list(dict.fromkeys(x.strip() for x in rows if in_host(x.strip(), host)))[:100], "reason": " | ".join(x[:160] for x in rows if x.startswith("[diagnostic]") or x.startswith("[stderr]"))[:350]}
+    return {"status": status, "endpoints": list(dict.fromkeys(x.strip() for x in rows if in_host(x.strip(), host)))[:max(1, min(int(limit or config.ENDPOINT_LIMIT_DEFAULT), config.ENDPOINT_LIMIT_MAX))], "reason": " | ".join(x[:160] for x in rows if x.startswith("[diagnostic]") or x.startswith("[stderr]"))[:350]}
 
 async def nuclei(url, host, agent):
     rows, status = await execute(["/usr/local/bin/nuclei", "-u", url, "-t", "/app/app/nuclei-templates/technology-headers.yaml", "-rl", "1",
@@ -68,7 +68,7 @@ async def nuclei(url, host, agent):
 _gau_failures = 0
 _gau_disabled_until = 0.0
 
-async def gau(url, host):
+async def gau(url, host, limit=None):
     global _gau_failures, _gau_disabled_until
     if time.monotonic() < _gau_disabled_until:
         return {"status": "unavailable", "endpoints": [],
@@ -84,7 +84,7 @@ async def gau(url, host):
         _gau_failures = 0
         _gau_disabled_until = 0.0
     return {"status": status, "endpoints": list(dict.fromkeys(
-        value.strip() for value in rows if in_host(value.strip(), host)))[:100], "reason": " | ".join(x for x in rows if x.startswith("[diagnostic]") or x.startswith("[stderr]"))[:350]}
+        value.strip() for value in rows if in_host(value.strip(), host)))[:max(1, min(int(limit or config.ENDPOINT_LIMIT_DEFAULT), config.ENDPOINT_LIMIT_MAX))], "reason": " | ".join(x for x in rows if x.startswith("[diagnostic]") or x.startswith("[stderr]"))[:350]}
 
 async def probe(urls, host, agent, limit=1):
     """Probe exact-host URLs in bounded batches, avoiding one subprocess per URL."""

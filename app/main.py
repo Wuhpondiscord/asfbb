@@ -312,13 +312,14 @@ async def worker():
                 job["pipeline"][module] = "running"
                 try:
                     if module == "gau":
-                        result = await gau(url, host)
+                        result = await gau(url, host, spec.options.endpoint_limit)
                         for discovered in result["endpoints"]:
                             endpoint_sources.setdefault(discovered, []).append("gau")
                         endpoints = list(dict.fromkeys(endpoints + result["endpoints"]))[:spec.options.endpoint_limit]
                         job["endpoints"] = endpoints[1:]
                     elif module == "katana":
-                        result = await katana(url, host, spec.user_agent, spec.options.katana_depth)
+                        result = await katana(url, host, spec.user_agent, spec.options.katana_depth,
+                                          spec.options.endpoint_limit)
                         for discovered in result["endpoints"]:
                             endpoint_sources.setdefault(discovered, []).append("katana")
                         endpoints = list(dict.fromkeys(endpoints + result["endpoints"]))[:spec.options.endpoint_limit]
@@ -407,6 +408,13 @@ async def worker():
                     summary = ("Discovered " + str(len(result.get("endpoints", []))) +
                                " endpoints; " + str(len(result.get("probes", []))) +
                                " probes; " + str(len(result.get("alerts", []))) + " module alerts")
+                if module == "nuclei":
+                    summary = ("Nuclei templates: " +
+                               ", ".join(result.get("templates", ["unknown"])) +
+                               "; matches: " + str(len(result.get("alerts", []))))
+                if module == "arjun":
+                    summary = (str(len(result.get("parameters", []))) +
+                               " structured parameters. " + summary)
                 if module == "zap-passive":
                     summary = ("ZAP-proxied requests: " + str(job["request_count"]) +
                                "; alerts: " + str(len(job["alerts"])) +

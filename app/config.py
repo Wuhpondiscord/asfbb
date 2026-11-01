@@ -42,3 +42,5 @@ ZAP_PASSIVE_POLL_SECONDS = 0.5
 
 # One GAU archive source is selected at a time; change after validating availability.
 GAU_PROVIDER = "wayback"
+
+PROCESS_OUTPUT_MAX_LINES = 5000
