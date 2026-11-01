@@ -58,6 +58,7 @@ class PipelineOptions(BaseModel):
     endpoint_limit: int = Field(default=20, ge=1, le=100)
     httpx_limit: int = Field(default=3, ge=1, le=10)
     katana_depth: int = Field(default=1, ge=1, le=2)
+    zap_endpoint_limit: int = Field(default=1, ge=1, le=10)
 
 class ScanRequest(BaseModel):
     asset_id: str
@@ -281,7 +282,7 @@ async def worker():
                     endpoints = list(dict.fromkeys(endpoints + result["endpoints"]))[:spec.options.endpoint_limit]
                     job["endpoints"] = endpoints[1:]
                 elif module == "katana":
-                    result = await katana(url, host, spec.user_agent)
+                    result = await katana(url, host, spec.user_agent, spec.options.katana_depth)
                     endpoints = list(dict.fromkeys(endpoints + result["endpoints"]))[:100]
                     job["endpoints"] = endpoints[1:]
                 elif module == "httpx":

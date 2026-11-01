@@ -68,7 +68,7 @@ async function scan(){
  }catch(e){message('Scan queue error: '+e.message,true)}
 }
 async function inspectJwt(){const token=el('jwt').value;try{const r=await api('/tools/jwt/inspect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token})});el('jwtResults').textContent=JSON.stringify(r,null,2);el('jwt').value=''}catch(e){el('jwtResults').textContent=e.message}}
-function pipelineOptions(){return {endpoint_limit:Number(el("settingsLimit").value),httpx_limit:Number(el("settingsHttpx").value),katana_depth:Number(el("settingsKatana").value)}}
+function pipelineOptions(){return {endpoint_limit:Number(el("settingsLimit").value),httpx_limit:Number(el("settingsHttpx").value),katana_depth:Number(el("settingsKatana").value),zap_endpoint_limit:Number(el("settingsZap").value)}}
 function applySettings(){
  const proposed=el('settingsOrder').value.trim();
  if(!proposed)return message('Enter the ordered modules.',true);

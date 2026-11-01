@@ -22,8 +22,8 @@ def in_host(url, host):
     except ValueError:
         return False
 
-async def katana(url, host, agent):
-    rows, status = await execute(["/usr/local/bin/katana", "-u", url, "-d", "1", "-fs", "fqdn", "-c", "1",
+async def katana(url, host, agent, depth=1):
+    rows, status = await execute(["/usr/local/bin/katana", "-u", url, "-d", str(max(1,min(int(depth),2))), "-fs", "fqdn", "-c", "1",
         "-p", "1", "-rl", "1", "-ct", "30s", "-timeout", "8", "-retry", "0",
         "-H", "User-Agent: " + agent, "-silent", "-duc"], 65)
     return {"status": status, "endpoints": list(dict.fromkeys(x.strip() for x in rows if in_host(x.strip(), host)))[:100]}
