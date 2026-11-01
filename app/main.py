@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from .scope import LEVELS, parse_csv, public_host, target_url
 from . import storage
 from .jwtcheck import inspect_jwt
-from .pipeline import katana, nuclei, gau, probe
+from .pipeline import katana, nuclei, gau, probe, in_host
 from .review import ACTIVE_MODULES, review
 
 
