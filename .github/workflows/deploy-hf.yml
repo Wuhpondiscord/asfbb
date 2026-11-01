@@ -46,6 +46,20 @@ jobs:
             test -f /opt/sqlmap/sqlmap.py
             test -x /opt/asfb-venv/bin/arjun
             /opt/asfb-venv/bin/python -c "import fastapi, httpx; import app.main, app.review"
+            /usr/local/bin/dalfox scan --help > /tmp/dalfox-help 2>&1 || true
+            grep -q -- "--workers" /tmp/dalfox-help
+            /usr/local/bin/gau --help > /tmp/gau-help 2>&1 || true
+            grep -q -- "--providers" /tmp/gau-help
+            /usr/local/bin/katana -h > /tmp/katana-help 2>&1 || true
+            grep -q -- "-depth" /tmp/katana-help
+            /usr/local/bin/pd-httpx -h > /tmp/httpx-help 2>&1 || true
+            grep -q -- "-list" /tmp/httpx-help
+            /usr/local/bin/ffuf -h > /tmp/ffuf-help 2>&1 || true
+            grep -q -- "-json" /tmp/ffuf-help
+            /opt/asfb-venv/bin/arjun -h > /tmp/arjun-help 2>&1 || true
+            grep -q -- "-oJ" /tmp/arjun-help
+            /usr/local/bin/nuclei -validate -t /app/app/nuclei-templates/technology-headers.yaml -duc > /tmp/nuclei-validate 2>&1
+            /opt/asfb-venv/bin/python -c "import pathlib; assert pathlib.Path(\"/opt/sqlmap/sqlmap.py\").is_file()"
           '
       - name: Validate Hugging Face token
         env:
