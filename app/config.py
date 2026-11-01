@@ -27,3 +27,7 @@ HTTPX_TIMEOUT_SECONDS = 30
 
 # Process batches are kept small so scans honor conservative per-host rates.
 HTTPX_BATCH_SIZE = 25
+
+# Stop retrying a consistently unavailable archive provider across many jobs.
+GAU_BREAKER_FAILURES = 4
+GAU_BREAKER_COOLDOWN_SECONDS = 900

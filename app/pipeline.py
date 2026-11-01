@@ -3,6 +3,7 @@ import json
 import re
 import os
 import tempfile
+import time
 from urllib.parse import urlsplit
 from . import config
 
@@ -64,9 +65,24 @@ async def nuclei(url, host, agent):
                          "source": "nuclei", "template_id": obj.get("template-id")})
     return {"status": status, "alerts": findings[:100], "reason": " | ".join(x[:180] for x in rows if x.startswith("[stderr]") or x.startswith("[diagnostic]"))[:500]}
 
+_gau_failures = 0
+_gau_disabled_until = 0.0
+
 async def gau(url, host):
+    global _gau_failures, _gau_disabled_until
+    if time.monotonic() < _gau_disabled_until:
+        return {"status": "unavailable", "endpoints": [],
+                "reason": "Wayback archive requests repeatedly timed out; provider temporarily disabled for this process"}
     rows, status = await execute(["/usr/local/bin/gau", "--threads", "1", "--timeout", "8",
         "--retries", "0", "--providers", "wayback", host], config.GAU_TIMEOUT_SECONDS)
+    if status == "timeout":
+        _gau_failures += 1
+        if _gau_failures >= config.GAU_BREAKER_FAILURES:
+            _gau_disabled_until = time.monotonic() + config.GAU_BREAKER_COOLDOWN_SECONDS
+            _gau_failures = 0
+    else:
+        _gau_failures = 0
+        _gau_disabled_until = 0.0
     return {"status": status, "endpoints": list(dict.fromkeys(
         value.strip() for value in rows if in_host(value.strip(), host)))[:100], "reason": " | ".join(x for x in rows if x.startswith("[diagnostic]") or x.startswith("[stderr]"))[:350]}
 
