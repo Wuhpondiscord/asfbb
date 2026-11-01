@@ -24,6 +24,10 @@ app = FastAPI(title="ASFB Scanner API", version="0.1.0", docs_url="/docs")
 assets = {}
 accounts = {}
 jobs = {}
+scan_events = []
+def log_event(job, event, **details):
+    scan_events.append({"time": time.time(), "owner": job.get("owner"), "job_id": job.get("id"), "target": job.get("target"), "event": event, **details})
+    if len(scan_events) > 10000: del scan_events[:1000]
 queue = asyncio.Queue()
 zap_lock = Lock()
 
@@ -181,6 +185,7 @@ async def create_scan(spec: ScanRequest, request: Request):
     jobs[identifier] = {"owner": request.state.sid, "id": identifier, "asset_id": spec.asset_id, "target": url,
                         "status": "queued", "alerts": [], "error": None, "created": time.time(),
                         "request_count": 0, "cancelled": False, "modules": spec.modules, "endpoints": [], "pipeline": {}, "reviews": [], "probes": [], "options": spec.options.model_dump(), "progress": 0, "stage": "queued"}
+    log_event(jobs[identifier], "queued", modules=spec.modules)
     # Public scan results are ephemeral.
     await queue.put((identifier, spec))
     return {"id": identifier, "status": "queued"}
@@ -192,11 +197,12 @@ class BatchRequest(BaseModel):
     delay_seconds: float = Field(default=1.5, ge=1, le=30)
     modules: list[str] = Field(default_factory=lambda: ["zap-passive"])
     options: PipelineOptions = Field(default_factory=PipelineOptions)
+    active_confirmed: bool = False
 
 @app.post("/api/scans/batch", dependencies=[Depends(authorize)])
 async def batch_scans(payload: BatchRequest, request: Request):
-    if ACTIVE_MODULES.intersection(payload.modules):
-        raise HTTPException(422, "Active review modules cannot run in bulk jobs")
+    if ACTIVE_MODULES.intersection(payload.modules) and (len(payload.asset_ids) > 5 or not payload.active_confirmed):
+        raise HTTPException(422, "Active review requires authorization and at most five targets")
     if not payload.policy_confirmed:
         raise HTTPException(422, "Program policy confirmation is required")
     if len(set(payload.asset_ids)) != len(payload.asset_ids) or queue.qsize() + len(payload.asset_ids) > 1000:
@@ -213,7 +219,7 @@ async def batch_scans(payload: BatchRequest, request: Request):
     result = []
     for asset_id in payload.asset_ids:
         result.append(await create_scan(ScanRequest(asset_id=asset_id, policy_confirmed=True, user_agent=payload.user_agent,
-                                                    delay_seconds=payload.delay_seconds, modules=payload.modules, options=payload.options), request))
+                                                    delay_seconds=payload.delay_seconds, modules=payload.modules, options=payload.options, active_confirmed=payload.active_confirmed), request))
     return {"queued": len(result), "scans": result}
 
 class JWTInput(BaseModel):
@@ -238,6 +244,10 @@ def clear_findings(request: Request):
             cleared += len(job.get("alerts") or [])
             job["alerts"] = []
     return {"cleared": cleared}
+
+@app.get("/api/logs", dependencies=[Depends(authorize)])
+def scan_logs(request: Request):
+    return {"events": [{k: v for k,v in row.items() if k != "owner"} for row in scan_events if row["owner"] == request.state.sid][-2000:]}
 
 @app.get("/api/report", dependencies=[Depends(authorize)])
 def full_report(request: Request):
@@ -278,6 +288,7 @@ async def worker():
                 job["status"] = "cancelled"
                 continue
             job["status"] = "running"
+            log_event(job, "started")
             url, host = target_url(assets[spec.asset_id])
             endpoints = [url]
             endpoint_sources = {url: ["scope"]}
@@ -287,6 +298,7 @@ async def worker():
                     break
                 public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
                 job["stage"] = module
+                log_event(job, "stage_started", module=module)
                 job["progress"] = round(position * 100 / len(spec.modules))
                 job["pipeline"][module] = "running"
                 if module == "gau":
@@ -350,10 +362,12 @@ async def worker():
                     result = await review(module, url, host)
                     job["reviews"].append(result)
                 job["pipeline"][module] = result["status"]
+                log_event(job, "stage_finished", module=module, status=result["status"], alerts=len(job.get("alerts", [])), endpoints=len(job.get("endpoints", [])))
                 job["endpoint_sources"] = {key: sorted(set(value)) for key, value in endpoint_sources.items() if key in endpoints}
                 job["progress"] = round((position + 1) * 100 / len(spec.modules))
             job["status"] = "cancelled" if job["cancelled"] else "completed"
             job["stage"] = job["status"]
+            log_event(job, "finished", status=job["status"])
             if job["status"] == "completed":
                 job["progress"] = 100
         except Exception as exc:
