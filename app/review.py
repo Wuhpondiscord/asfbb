@@ -14,7 +14,7 @@ def command(module, url, host):
     if module == "arjun":
         return ["/opt/asfb-venv/bin/arjun", "-u", url, "-t", "1"]
     if module == "dalfox":
-        return ["/usr/local/bin/dalfox", "url", url, "--worker", "1",
+        return ["/usr/local/bin/dalfox", "scan", url, "--workers", "1",
                 "--timeout", "5", "--silence"]
     if module == "sqlmap":
         if not urlsplit(url).query:
@@ -32,4 +32,5 @@ async def review(module, url, host):
     lines, status = await execute(args, 40)
     return {"source": module, "status": status, "target": url,
             "output": "\n".join(lines)[:2500],
+            "reason": " | ".join(line[:180] for line in lines if line.startswith("[stderr]"))[:500],
             "note": "Unverified tool output. Confirm impact manually before reporting."}

@@ -55,7 +55,7 @@ async def nuclei(url, host, agent):
                          "confidence": "Medium", "url": found_url,
                          "description": str(info.get("description") or "")[:1000],
                          "source": "nuclei", "template_id": obj.get("template-id")})
-    return {"status": status, "alerts": findings[:100]}
+    return {"status": status, "alerts": findings[:100], "reason": " | ".join(x[:180] for x in rows if x.startswith("[stderr]"))[:500]}
 
 async def gau(url, host):
     rows, status = await execute(["/usr/local/bin/gau", "--threads", "1", "--timeout", "15",

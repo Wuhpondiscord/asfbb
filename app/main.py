@@ -362,7 +362,7 @@ async def worker():
                     result = await review(module, url, host)
                     job["reviews"].append(result)
                 job["pipeline"][module] = result["status"]
-                log_event(job, "stage_finished", module=module, status=result["status"], alerts=len(job.get("alerts", [])), endpoints=len(job.get("endpoints", [])))
+                log_event(job, "stage_finished", module=module, status=result["status"], reason=result.get("reason", ""), alerts=len(job.get("alerts", [])), endpoints=len(job.get("endpoints", [])))
                 job["endpoint_sources"] = {key: sorted(set(value)) for key, value in endpoint_sources.items() if key in endpoints}
                 job["progress"] = round((position + 1) * 100 / len(spec.modules))
             job["status"] = "cancelled" if job["cancelled"] else "completed"
