@@ -140,12 +140,14 @@ async function loadScans(){try{
  el('scans').innerHTML=scanJobs.slice().reverse().map(j=>{
  const endpoints=(j.endpoints||[]).map(u=>'<li>'+esc(u)+'</li>').join('');
  const evidence=(j.reviews||[]).map(r=>'<details data-detail-key="'+esc(j.id+':review:'+r.source)+'" '+(existingOpen.has(j.id+':review:'+r.source)?'open':'')+'><summary>'+esc(r.source)+' · '+esc(r.status)+'</summary><pre class="results">'+esc(r.output||'No output returned')+'</pre><p class="muted">Unverified; manually review before reporting.</p></details>').join('');
+ const moduleLogs=Object.entries(j.stage_details||{}).map(([name,d])=>'<details data-detail-key="'+esc(j.id+':log:'+name)+'" '+(existingOpen.has(j.id+':log:'+name)?'open':'')+'><summary>'+esc(name)+' · '+esc(d.status)+' · '+Math.round(d.elapsed_ms/1000)+'s</summary><pre class="results">'+esc(d.summary||'No further output')+'</pre>'+(d.reason?'<p class="error">'+esc(d.reason)+'</p>':'')+'</details>').join('');
  const stages=Object.entries(j.pipeline||{}).map(([n,v])=>'<span class="pill">'+esc(n)+': '+esc(v)+(j.stage_details?.[n]?.elapsed_ms!==undefined?' · '+Math.round(j.stage_details[n].elapsed_ms/1000)+'s':'')+'</span>').join(' ');
  return '<details class="findrow" data-detail-key="'+esc(j.id)+'" '+(existingOpen.has(j.id)?'open':'')+'><summary><strong>'+esc(j.target)+'</strong> <span class="pill">'+esc(j.status)+'</span> <span class="subtle">'+(j.alerts||[]).length+' alerts · '+(j.endpoints||[]).length+' endpoints · '+j.request_count+' requests</span></summary>'+
  '<div class="subtle">Job '+esc(j.id)+' · Stage '+esc(j.stage||j.status)+'</div>'+
  '<progress max="100" value="'+Number(j.progress||0)+'" style="width:100%;margin:10px 0"></progress>'+
  '<div class="controls">'+stages+'</div>'+
  (j.error?'<p class="error">'+esc(j.error)+'</p>':'')+Object.entries(j.stage_details||{}).filter(([n,d])=>d.reason).map(([n,d])=>'<p class="subtle">'+esc(n)+': '+esc(d.reason)+'</p>').join('')+
+ moduleLogs+
  (endpoints?'<details data-detail-key="'+esc(j.id+':endpoints')+'" '+(existingOpen.has(j.id+':endpoints')?'open':'')+'><summary>Discovered endpoints</summary><ul>'+endpoints+'</ul></details>':'')+
  evidence+
  '<button class="secondary" onclick="switchTab(\'findings\')">View findings</button></details>';
