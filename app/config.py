@@ -60,3 +60,15 @@ NUCLEI_TEMPLATE_PATHS = (
 )
 NUCLEI_TARGET_LIMIT = 10
 NUCLEI_FINDINGS_LIMIT = 100
+
+# Arjun: small/medium/large built-in dictionaries; configurable precision/speed.
+ARJUN_WORDLIST = "small"
+ARJUN_CHUNK_SIZE = 150
+ARJUN_HTTP_TIMEOUT_SECONDS = 8
+ARJUN_RATE_LIMIT = 2
+ARJUN_PREFER_DYNAMIC_ENDPOINTS = True
+
+# Dalfox machine-readable findings with bounded concurrency and request timeout.
+DALFOX_WORKERS = 1
+DALFOX_HTTP_TIMEOUT_SECONDS = 5
+DALFOX_FINDINGS_LIMIT = 100

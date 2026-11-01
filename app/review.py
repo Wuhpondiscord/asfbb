@@ -19,10 +19,10 @@ def command(module, url, host):
                 "-maxtime", "25", "-timeout", "5", "-noninteractive", "-json"]
     if module == "arjun":
         return ["/opt/asfb-venv/bin/arjun", "-u", url, "-t", "1",
-                "-T", "8", "--rate-limit", "2"]
+                "-T", str(config.ARJUN_HTTP_TIMEOUT_SECONDS), "-w", config.ARJUN_WORDLIST, "-c", str(config.ARJUN_CHUNK_SIZE), "--rate-limit", str(config.ARJUN_RATE_LIMIT)]
     if module == "dalfox":
-        return ["/usr/local/bin/dalfox", "scan", url, "--workers", "1",
-                "--timeout", "5", "--silence"]
+        return ["/usr/local/bin/dalfox", "scan", url, "--workers", str(config.DALFOX_WORKERS),
+                "--timeout", str(config.DALFOX_HTTP_TIMEOUT_SECONDS), "--no-color", "--silence", "-f", "json"]
     if module == "sqlmap":
         if not urlsplit(url).query:
             raise ValueError("SQLmap review requires a parameterized URL")
@@ -65,7 +65,7 @@ def summarize_review(module, lines):
                     + (f"\nSuppressed {len(results)-len(kept)} repeated redirects to the same destination; likely wildcard redirect behavior." if common else "")).strip()
     if module == "arjun":
         cleaned = [re.sub(r"\s+", " ", line).strip() for line in lines
-                   if not re.search(r"Processing chunks:|^\\s*[_/\\\\|()]+\\s*$", line)]
+                   if "Processing chunks:" not in line]
         return "\n".join(line for line in cleaned if line)[-2500:]
     return "\n".join(lines)[:5000]
 
@@ -90,30 +90,83 @@ def read_arjun_results(path, host):
     return found[:100]
 
 
+def choose_arjun_target(primary, discovered, host):
+    """Prefer an already-discovered parameterized or API URL on the same exact host."""
+    if not config.ARJUN_PREFER_DYNAMIC_ENDPOINTS:
+        return primary
+    candidates = [u for u in discovered if isinstance(u, str) and in_host(u, host)]
+    def score(value):
+        parts = urlsplit(value)
+        path = parts.path.lower()
+        if parts.query:
+            return 3
+        if "/api/" in path or path.endswith((".php", ".aspx", ".jsp", ".json")):
+            return 2
+        if path.endswith((".js", ".css", ".svg", ".png", ".jpg", ".woff")):
+            return -1
+        return 0
+    best = max(candidates, key=score, default=primary)
+    return best if score(best) > score(primary) else primary
+
+
+def read_dalfox_report(path, host, default_url):
+    """Parse Dalfox v3 JSON output and discard out-of-scope finding URLs."""
+    try:
+        report = json.loads(Path(path).read_text(encoding="utf-8")[:2_000_000])
+    except (OSError, ValueError):
+        return [], {}
+    if not isinstance(report, dict):
+        return [], {}
+    meta = report.get("meta") if isinstance(report.get("meta"), dict) else {}
+    findings = []
+    for item in report.get("findings", []):
+        if not isinstance(item, dict):
+            continue
+        candidate = item.get("data") or default_url
+        if not isinstance(candidate, str) or not in_host(candidate, host):
+            continue
+        tier = str(item.get("type") or "unknown").upper()
+        evidence = str(item.get("evidence") or item.get("message_str") or "")[:350]
+        findings.append({
+            "source": "dalfox", "name": "Dalfox XSS candidate (" + tier + ")",
+            "url": candidate, "tier": tier,
+            "risk": str(item.get("severity") or "info").title().replace("Info", "Informational"),
+            "confidence": "Medium" if tier == "V" else "Low",
+            "description": ("Unverified automated " + tier + " signal; " + evidence)[:600],
+            "parameter": str(item.get("param") or "")[:80],
+        })
+    return findings[:config.DALFOX_FINDINGS_LIMIT], meta
+
+
 async def review(module, url, host):
     if module == "sqlmap" and not urlsplit(url).query:
         return {"source": module, "status": "skipped", "target": url, "output": "", "reason": "URL has no query parameters"}
     args = command(module, url, host)
     parameters = []
+    dalfox_findings, dalfox_meta = [], {}
     if module == "arjun":
         with tempfile.TemporaryDirectory(prefix="asfb-arjun-") as tmp:
             export_path = str(Path(tmp) / "parameters.json")
             lines, status = await execute(args + ["-oJ", export_path],
                                           config.ARJUN_TIMEOUT_SECONDS)
             parameters = read_arjun_results(export_path, host)
+    elif module == "dalfox":
+        with tempfile.TemporaryDirectory(prefix="asfb-dalfox-") as tmp:
+            path = str(Path(tmp) / "findings.json")
+            lines, status = await execute(args + ["-o", path], config.DALFOX_TIMEOUT_SECONDS)
+            dalfox_findings, dalfox_meta = read_dalfox_report(path, host, url)
     else:
-        timeout = (config.DALFOX_TIMEOUT_SECONDS if module == "dalfox"
-                   else config.PROCESS_TIMEOUT_SECONDS)
-        lines, status = await execute(args, timeout)
+        lines, status = await execute(args, config.PROCESS_TIMEOUT_SECONDS)
     has_evidence = module == "dalfox" and any("[POC]" in line for line in lines)
     exit_code = next((int(line.rsplit(":", 1)[1].strip()) for line in lines
                       if line.startswith("[diagnostic] Process exit code:")
                       and line.rsplit(":", 1)[1].strip().isdigit()), None)
-    if module == "dalfox" and status == "failed":
-        # Documented: 0 = clean, 1 = findings, 2 = runtime/configuration error.
-        if exit_code == 1:
+    if module == "dalfox":
+        if dalfox_meta.get("incomplete"):
+            status = "partial"
+        elif exit_code == 1 or (dalfox_findings and status == "completed"):
             status = "findings"
-        elif has_evidence:
+        elif has_evidence and status == "failed":
             status = "partial"
     # Code 1 is an expected Dalfox finding outcome, not an error diagnostic.
     displayed_lines = [line for line in lines
@@ -125,10 +178,20 @@ async def review(module, url, host):
         reason = f"{module} exited unsuccessfully; inspect its output"
     if not reason and status == "partial" and has_evidence:
         reason = "Unverified findings were returned; runtime verification required. The tool did not finish cleanly"
+    if module == "dalfox" and dalfox_findings:
+        output = "\n".join(
+            f'{i + 1}. {item["name"]} | {item["url"]} | confidence={item["confidence"]}'
+            for i, item in enumerate(dalfox_findings[:30]))
+    else:
+        output = summarize_review(module, displayed_lines)
+    if module == "dalfox" and dalfox_meta.get("incomplete"):
+        reason = ("Dalfox reports incomplete results; " + reason).strip()[:500]
     return {"source": module, "status": status, "target": url,
             "exit_code": exit_code,
+            "metadata": dalfox_meta,
+            "findings": dalfox_findings,
             "parameters": parameters,
             "endpoints": ffuf_discoveries(lines, host) if module == "ffuf" else [],
-            "output": summarize_review(module, displayed_lines),
+            "output": output,
             "reason": reason[:500],
             "note": "Unverified tool output. Confirm impact manually before reporting."}
