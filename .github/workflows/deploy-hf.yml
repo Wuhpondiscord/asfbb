@@ -33,6 +33,20 @@ jobs:
           Path("/tmp/asfb-inline.js").write_text(js)
           PY
           node --check /tmp/asfb-inline.js
+      - name: Build and verify scanner container
+        run: |
+          docker build --progress plain -t asfb-ci .
+          docker run --rm --entrypoint /bin/sh asfb-ci -ec '
+            test -x /usr/local/bin/ffuf
+            test -x /usr/local/bin/dalfox
+            test -x /usr/local/bin/nuclei
+            test -x /usr/local/bin/katana
+            test -x /usr/local/bin/gau
+            test -x /usr/local/bin/pd-httpx
+            test -f /opt/sqlmap/sqlmap.py
+            test -x /opt/asfb-venv/bin/arjun
+            /opt/asfb-venv/bin/python -c "import fastapi, httpx; import app.main, app.review"
+          '
       - name: Validate Hugging Face token
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
