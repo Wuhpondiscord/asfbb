@@ -60,11 +60,11 @@ class Account(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
 
 class PipelineOptions(BaseModel):
-    endpoint_limit: int = Field(default=20, ge=1, le=100)
-    httpx_limit: int = Field(default=3, ge=1, le=10)
+    endpoint_limit: int = Field(default=100, ge=1, le=2000)
+    httpx_limit: int = Field(default=10, ge=1, le=100)
     katana_depth: int = Field(default=1, ge=1, le=5)
-    zap_endpoint_limit: int = Field(default=1, ge=1, le=10)
-    request_budget: int = Field(default=20, ge=1, le=100)
+    zap_endpoint_limit: int = Field(default=5, ge=1, le=100)
+    request_budget: int = Field(default=100, ge=1, le=2000)
     discovery_first: bool = True
 
 class ScanRequest(BaseModel):

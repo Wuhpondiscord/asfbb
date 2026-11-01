@@ -17,7 +17,7 @@ async def execute(args, timeout):
     except asyncio.TimeoutError:
         p.kill()
         await p.communicate()
-        return ["Stage timed out"], "timeout"
+        return ["[diagnostic] Stage exceeded its execution deadline; no complete output was available"], "timeout"
     lines = clean_output(out).splitlines()[:500]
     if p.returncode:
         lines += ["[stderr] " + x[:200] for x in clean_output(err).splitlines()[-8:]]
@@ -37,7 +37,7 @@ async def katana(url, host, agent, depth=1):
     return {"status": status, "endpoints": list(dict.fromkeys(x.strip() for x in rows if in_host(x.strip(), host)))[:100]}
 
 async def nuclei(url, host, agent):
-    rows, status = await execute(["/usr/local/bin/nuclei", "-u", url, "-tags", "tech", "-rl", "1",
+    rows, status = await execute(["/usr/local/bin/nuclei", "-u", url, "-t", "/app/app/nuclei-templates/technology-headers.yaml", "-rl", "1",
         "-c", "1", "-bs", "1", "-timeout", "8", "-retries", "0", "-jsonl",
         "-silent", "-duc", "-H", "User-Agent: " + agent], 90)
     findings = []
@@ -58,14 +58,14 @@ async def nuclei(url, host, agent):
     return {"status": status, "alerts": findings[:100], "reason": " | ".join(x[:180] for x in rows if x.startswith("[stderr]"))[:500]}
 
 async def gau(url, host):
-    rows, status = await execute(["/usr/local/bin/gau", "--threads", "1", "--timeout", "15",
-        host], 55)
+    rows, status = await execute(["/usr/local/bin/gau", "--threads", "1", "--timeout", "8",
+        "--retries", "0", "--providers", "wayback", host], 25)
     return {"status": status, "endpoints": list(dict.fromkeys(
         value.strip() for value in rows if in_host(value.strip(), host)))[:100]}
 
 async def probe(urls, host, agent, limit=1):
     # Header-only non-intrusive metadata probe. URLs are limited to the selected host.
-    targets = list(dict.fromkeys(u for u in urls if in_host(u, host)))[:max(1, min(int(limit), 10))]
+    targets = list(dict.fromkeys(u for u in urls if in_host(u, host)))[:max(1, min(int(limit), 100))]
     if not targets:
         return {"status": "completed", "probes": []}
     all_rows = []
@@ -89,4 +89,4 @@ async def probe(urls, host, agent, limit=1):
                                "source": "httpx"})
         except ValueError:
             continue
-    return {"status": status, "probes": probes[:10]}
+    return {"status": status, "probes": probes[:100]}

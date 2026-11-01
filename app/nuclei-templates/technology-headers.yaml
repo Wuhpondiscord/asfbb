@@ -1,0 +1,17 @@
+id: asfb-tech-response-headers
+info:
+  name: HTTP Server Technology Header
+  author: asfb
+  severity: info
+  description: Detects a declared server header; this is informational and not a vulnerability.
+  tags: tech,headers
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: regex
+        part: header
+        regex:
+          - '(?im)^server: *(nginx|apache|cloudflare|microsoft-iis|caddy|openresty|envoy)\\b'
