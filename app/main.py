@@ -368,10 +368,12 @@ async def worker():
                 log_event(job, "stage_finished", module=module, status=result["status"], elapsed_ms=elapsed_ms, reason=str(result.get("reason", ""))[:250], alerts=len(job.get("alerts", [])), endpoints=len(job.get("endpoints", [])))
                 job["endpoint_sources"] = {key: sorted(set(value)) for key, value in endpoint_sources.items() if key in endpoints}
                 job["progress"] = round((position + 1) * 100 / len(spec.modules))
-            job["status"] = "cancelled" if job["cancelled"] else "completed"
+            stage_statuses = list(job["pipeline"].values())
+            degraded = any(status in ("failed", "timeout", "unavailable") for status in stage_statuses)
+            job["status"] = "cancelled" if job["cancelled"] else ("partial" if degraded else "completed")
             job["stage"] = job["status"]
             log_event(job, "finished", status=job["status"])
-            if job["status"] == "completed":
+            if job["status"] in ("completed", "partial"):
                 job["progress"] = 100
         except Exception as exc:
             job["status"] = "failed"
