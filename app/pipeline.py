@@ -25,6 +25,7 @@ async def execute(args, timeout):
     lines = clean_output(out).splitlines()[:500]
     if p.returncode:
         lines += ["[stderr] " + x[:200] for x in clean_output(err).splitlines()[-8:]]
+        lines.append("[diagnostic] Process exit code: " + str(p.returncode))
     return lines, "completed" if p.returncode == 0 else "failed"
 
 def in_host(url, host):
@@ -59,7 +60,7 @@ async def nuclei(url, host, agent):
                          "confidence": "Medium", "url": found_url,
                          "description": str(info.get("description") or "")[:1000],
                          "source": "nuclei", "template_id": obj.get("template-id")})
-    return {"status": status, "alerts": findings[:100], "reason": " | ".join(x[:180] for x in rows if x.startswith("[stderr]"))[:500]}
+    return {"status": status, "alerts": findings[:100], "reason": " | ".join(x[:180] for x in rows if x.startswith("[stderr]") or x.startswith("[diagnostic]"))[:500]}
 
 async def gau(url, host):
     rows, status = await execute(["/usr/local/bin/gau", "--threads", "1", "--timeout", "8",
@@ -78,7 +79,7 @@ async def probe(urls, host, agent, limit=1):
         args = ["/usr/local/bin/pd-httpx", "-u", target, "-json", "-silent",
             "-rl", "1", "-threads", "1", "-timeout", "8", "-retries", "0",
             "-H", "User-Agent: " + agent, "-no-color"]
-        rows, stage_status = await execute(args, 30)
+        rows, stage_status = await execute(args, config.HTTPX_TIMEOUT_SECONDS)
         all_rows.extend(rows)
         if stage_status != "completed": status = stage_status
     probes = []

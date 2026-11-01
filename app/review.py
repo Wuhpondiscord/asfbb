@@ -58,9 +58,14 @@ async def review(module, url, host):
     args = command(module, url, host)
     lines, status = await execute(args, config.PROCESS_TIMEOUT_SECONDS)
     has_evidence = module == "dalfox" and any("[POC]" in line for line in lines)
-    if has_evidence and status == "failed":
-        status = "partial"
+    if module == "dalfox" and status == "failed":
+        # Dalfox documents code 1 for findings, code 2 for a scan error.
+        code_one = any(line.strip() == "[diagnostic] Process exit code: 1" for line in lines)
+        if code_one and has_evidence:
+            status = "findings"
+        elif has_evidence:
+            status = "partial"
     return {"source": module, "status": status, "target": url,
             "output": summarize_review(module, lines),
-            "reason": (" | ".join(line[:180] for line in lines if line.startswith("[stderr]") or line.startswith("[diagnostic]")) or ("Dalfox returned a nonzero exit with unverified findings; runtime verification required" if has_evidence and status == "partial" else (f"{module} returned an unsuccessful exit status; inspect captured output" if status == "failed" else "")))[:500],
+            "reason": (" | ".join(line[:180] for line in lines if line.startswith("[stderr]") or line.startswith("[diagnostic]")) or ("Dalfox returned a nonzero exit with unverified findings; runtime verification required" if has_evidence and status in ("partial", "findings") else (f"{module} returned an unsuccessful exit status; inspect captured output" if status == "failed" else "")))[:500],
             "note": "Unverified tool output. Confirm impact manually before reporting."}
