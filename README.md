@@ -94,3 +94,14 @@ Still pending: cross-account IDOR testing, live JWT signature bypass testing, au
 
 ## No manual API keys
 The dashboard no longer requests an ASFB API key. The startup script generates an internal ZAP API key automatically. **Warning:** this build has no public API authentication; do not use it on a publicly accessible Space with real credentials or sensitive targets. Public anonymous scanning must be protected by appropriate abuse prevention and per-user isolation before production use.
+
+## v0.3: opt-in discovery pipeline
+
+The Space Docker image includes pinned ProjectDiscovery Nuclei v3.11.1 and Katana v1.8.0 binaries. Per scan choose **ZAP passive**, **Katana**, **Nuclei**, or a combination. ZAP remains on by default. These modules are not equivalent to passive analysis: Katana and Nuclei send additional traffic.
+
+- **Katana:** standard non-headless crawler, depth 1, exact-host scoping, one request/second, one worker, up to 30 seconds, up to 100 same-host discovered URLs returned per job. No form auto-filling or headless browser.
+- **Nuclei:** technology-detection templates only (`-tags tech`), one request/second, one worker, up to 90 seconds, 100 findings per job. Nuclei template updates may require network access on first run. This is not a general vulnerability/active-scan pipeline.
+- **Results:** findings from Nuclei are labeled `source: nuclei`; Katana endpoints and per-stage status are included in each job's JSON.
+- **Batch scans:** preserve the module selection for each of the up to 40 jobs per batch. These scans run sequentially and are unauthenticated; configured account cookies are passed only to the original single-target ZAP stage, not the new tools.
+
+**Important**: Confirm the target program explicitly permits automated crawling and template-based requests. The project remains an experimental public Space and does not independently prove user authorization or reliably prevent DNS-rebinding/egress abuse. Do not enable unrestricted scanning against targets that have not authorized these activities. Scan detections are preliminary and require manual verification.
