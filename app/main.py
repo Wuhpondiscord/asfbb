@@ -54,12 +54,18 @@ class Account(BaseModel):
     cookie: str = Field(default="", max_length=8000)
     headers: dict[str, str] = Field(default_factory=dict)
 
+class PipelineOptions(BaseModel):
+    endpoint_limit: int = Field(default=20, ge=1, le=100)
+    httpx_limit: int = Field(default=3, ge=1, le=10)
+    katana_depth: int = Field(default=1, ge=1, le=2)
+
 class ScanRequest(BaseModel):
     asset_id: str
     policy_confirmed: bool = False
     user_agent: str = Field(default="ASFB-Research/0.1", max_length=300)
     max_requests: int = Field(default=1, ge=1, le=10)
     delay_seconds: float = Field(default=1.5, ge=1, le=30)
+    options: PipelineOptions = Field(default_factory=PipelineOptions)
     account_id: str | None = None
     modules: list[str] = Field(default_factory=lambda: ["zap-passive"])
 
@@ -164,7 +170,7 @@ async def create_scan(spec: ScanRequest, request: Request):
     identifier = uuid.uuid4().hex
     jobs[identifier] = {"owner": request.state.sid, "id": identifier, "asset_id": spec.asset_id, "target": url,
                         "status": "queued", "alerts": [], "error": None, "created": time.time(),
-                        "request_count": 0, "cancelled": False, "modules": spec.modules, "endpoints": [], "pipeline": {}, "probes": [], "progress": 0, "stage": "queued"}
+                        "request_count": 0, "cancelled": False, "modules": spec.modules, "endpoints": [], "pipeline": {}, "probes": [], "options": spec.options.model_dump(), "progress": 0, "stage": "queued"}
     # Public scan results are ephemeral.
     await queue.put((identifier, spec))
     return {"id": identifier, "status": "queued"}
@@ -175,6 +181,7 @@ class BatchRequest(BaseModel):
     user_agent: str = Field(default="ASFB-Research/0.1", max_length=300)
     delay_seconds: float = Field(default=1.5, ge=1, le=30)
     modules: list[str] = Field(default_factory=lambda: ["zap-passive"])
+    options: PipelineOptions = Field(default_factory=PipelineOptions)
 
 @app.post("/api/scans/batch", dependencies=[Depends(authorize)])
 async def batch_scans(payload: BatchRequest, request: Request):
@@ -194,7 +201,7 @@ async def batch_scans(payload: BatchRequest, request: Request):
     result = []
     for asset_id in payload.asset_ids:
         result.append(await create_scan(ScanRequest(asset_id=asset_id, policy_confirmed=True, user_agent=payload.user_agent,
-                                                    delay_seconds=payload.delay_seconds, modules=payload.modules), request))
+                                                    delay_seconds=payload.delay_seconds, modules=payload.modules, options=payload.options), request))
     return {"queued": len(result), "scans": result}
 
 class JWTInput(BaseModel):
@@ -271,14 +278,14 @@ async def worker():
                 job["pipeline"][module] = "running"
                 if module == "gau":
                     result = await gau(url, host)
-                    endpoints = list(dict.fromkeys(endpoints + result["endpoints"]))[:100]
+                    endpoints = list(dict.fromkeys(endpoints + result["endpoints"]))[:spec.options.endpoint_limit]
                     job["endpoints"] = endpoints[1:]
                 elif module == "katana":
                     result = await katana(url, host, spec.user_agent)
                     endpoints = list(dict.fromkeys(endpoints + result["endpoints"]))[:100]
                     job["endpoints"] = endpoints[1:]
                 elif module == "httpx":
-                    result = await probe(endpoints, host, spec.user_agent)
+                    result = await probe(endpoints, host, spec.user_agent, spec.options.httpx_limit)
                     job["probes"] = result["probes"]
                 elif module == "zap-passive":
                     # Only the primary target is fetched through ZAP. Additional
