@@ -159,7 +159,7 @@ def remove_account(account_id: str, request: Request):
 @app.post("/api/scans", dependencies=[Depends(authorize)])
 async def create_scan(spec: ScanRequest, request: Request):
     if not spec.modules or len(spec.modules) != len(set(spec.modules)) or not set(spec.modules).issubset(({"zap-passive","katana","nuclei","gau","httpx"} | ACTIVE_MODULES)):
-        raise HTTPException(422, "Only passive scanning is currently supported")
+        raise HTTPException(422, "Invalid or duplicate pipeline modules")
     if ACTIVE_MODULES.intersection(spec.modules):
         if not spec.active_confirmed:
             raise HTTPException(422, "Explicit permission for active single-target tests is required")
@@ -171,7 +171,7 @@ async def create_scan(spec: ScanRequest, request: Request):
         raise HTTPException(422, "You must explicitly confirm program automation policy")
     item = assets.get(spec.asset_id)
     if not item or item.get("owner") != request.state.sid:
-        raise HTTPException(404, "Asset not found")
+        raise HTTPException(409, "Selected asset is no longer available in this session. Refresh assets or re-import the scope CSV.")
     try:
         url, host = target_url(item)
         public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
@@ -210,7 +210,7 @@ async def batch_scans(payload: BatchRequest, request: Request):
     for asset_id in payload.asset_ids:
         item = assets.get(asset_id)
         if item is None or item.get("owner") != request.state.sid:
-            raise HTTPException(404, f"Asset not found: {asset_id}")
+            raise HTTPException(409, "Selected scope is stale or belongs to another session. Refresh assets, re-import the CSV if necessary, and select targets again.")
         try:
             _, host = target_url(item)
             public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")

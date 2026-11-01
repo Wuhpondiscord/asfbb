@@ -20,7 +20,7 @@ const el=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function api(path,options={}){const h={...(options.headers||{})};const sid=sessionStorage.getItem('asfb-session');if(sid)h['X-ASFB-Session']=sid;const r=await fetch('/api'+path,{...options,headers:h,credentials:'same-origin'});const nextSid=r.headers.get('X-ASFB-Session');if(nextSid)sessionStorage.setItem('asfb-session',nextSid);const text=await r.text();let data;try{data=JSON.parse(text)}catch{data={detail:text}}if(!r.ok)throw Error(typeof data.detail==='string'?data.detail:JSON.stringify(data.detail||data));return data}
 function message(text,error=false){el('message').textContent=text;el('message').className=error?'error':'muted'}
-async function refresh(){try{const r=await api('/assets');assets=r.assets;render();await loadAccounts();await loadScans();message('Connected. '+assets.length+' imported assets loaded. Session '+(sessionStorage.getItem('asfb-session')?'active':'missing'))}catch(e){message('API connection failed: '+e.message,true)}}
+async function refresh(){try{const r=await api('/assets');assets=r.assets;const valid=new Set(assets.map(a=>a.id));const stale=[...selectedIds].filter(id=>!valid.has(id));for(const id of stale)selectedIds.delete(id);render();await loadAccounts();await loadScans();message('Connected. '+assets.length+' imported assets loaded. Session '+(sessionStorage.getItem('asfb-session')?'active':'missing'))}catch(e){message('API connection failed: '+e.message,true)}}
 function toggleTarget(id,checked){if(checked){selectedIds.add(id)}else selectedIds.delete(id);render()}
 function clearSelection(){selectedIds.clear();render()}
 function selectFiltered(){for(const id of visibleWebIds)selectedIds.add(id);render()}
@@ -49,8 +49,8 @@ async function upload(){const f=el('file').files[0];if(!f)return message('Choose
 async function addAccount(){const body={name:el('aname').value,host:el('ahost').value,cookie:el('acookie').value};try{await api('/accounts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});el('acookie').value='';await loadAccounts();message('Account profile added (memory only).')}catch(e){message(e.message,true)}}
 async function loadAccounts(){const a=await api('/accounts');el('account').innerHTML='<option value="">Anonymous</option>'+a.map(v=>'<option value="'+esc(v.id)+'">'+esc(v.name+' — '+v.host)+'</option>').join('')}
 async function scan(){
- const ids=Array.from(selectedIds).slice(0,1000);
- if(!ids.length)return message('Select at least one compatible web asset.',true);
+ await refresh();const ids=Array.from(selectedIds).slice(0,1000);
+ if(!ids.length)return message('No valid selected assets remain. The Space may have restarted; re-import the CSV and select targets again.',true);
  let modules;try{modules=enabledModules()}catch(e){return message(e.message,true)}
  if(!modules.length)return message('Choose at least one pipeline module.',true);const active=modules.some(m=>['ffuf','arjun','dalfox','sqlmap'].includes(m));if(active&&ids.length>5)return message('Active review allows up to 5 approved targets per batch.',true);if(active&&!el('activeConsent').checked)return message('Confirm active review authorization under Settings.',true);
  if(!el('policy').checked)return message('Confirm the program policy first.',true);
