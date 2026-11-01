@@ -1,7 +1,7 @@
 import asyncio
 from pathlib import Path
 from unittest.mock import patch
-from app import pipeline
+from app import pipeline, config
 
 def test_nuclei_has_explicit_bundled_template():
     async def fake(args, timeout):
@@ -17,8 +17,8 @@ def test_nuclei_has_explicit_bundled_template():
 
 def test_gau_has_short_bounded_lookup():
     async def fake(args,timeout):
-        assert "--providers" in args and "wayback" in args
-        assert timeout==25
+        assert "--providers" in args
+        assert timeout==config.GAU_PROVIDER_DEADLINE_SECONDS
         return ["[diagnostic] Stage exceeded its execution deadline; no complete output was available"],"timeout"
     with patch.object(pipeline,"execute",fake):
         output=asyncio.run(pipeline.gau("https://example.org","example.org"))

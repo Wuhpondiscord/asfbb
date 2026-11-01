@@ -6,7 +6,7 @@ def test_gau_circuit_breaker_avoids_repeated_provider_timeouts():
     async def run():
         calls = []
         async def fake(args, timeout):
-            calls.append(1)
+            calls.append(args[args.index("--providers") + 1])
             return ["[diagnostic] Deadline exceeded"], "timeout"
         with patch.object(pipeline, "execute", fake):
             pipeline._gau_failures = 0
@@ -15,9 +15,9 @@ def test_gau_circuit_breaker_avoids_repeated_provider_timeouts():
                 result = await pipeline.gau("https://example.org/", "example.org")
                 assert result["status"] == "timeout"
             skipped = await pipeline.gau("https://example.org/", "example.org")
-            assert skipped["status"] == "unavailable"
-            assert "temporarily" in skipped["reason"]
-            assert len(calls) == config.GAU_BREAKER_FAILURES
+            assert skipped["providers"][0]["status"] == "unavailable"
+            assert "Circuit breaker cooldown" in skipped["providers"][0]["reason"]
+            assert calls.count(config.GAU_PROVIDER) == config.GAU_BREAKER_FAILURES
     try:
         asyncio.run(run())
     finally:
