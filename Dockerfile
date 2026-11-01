@@ -17,7 +17,7 @@ COPY --from=pd-tools /usr/local/bin/ffuf /usr/local/bin/ffuf
 COPY --from=pd-tools /usr/local/bin/dalfox /usr/local/bin/dalfox
 COPY --from=pd-tools /opt/sqlmap /opt/sqlmap
 RUN apt-get update && apt-get install -y --no-install-recommends python3-venv python3-pip && rm -rf /var/lib/apt/lists/*
-RUN python3 -m venv /opt/asfb-venv && /opt/asfb-venv/bin/pip install --no-cache-dir fastapi==0.115.12 uvicorn==0.34.2 python-multipart==0.0.20 httpx==0.28.1 arjun==2.2.7
+RUN python3 -m venv /opt/asfb-venv && /opt/asfb-venv/bin/pip install --no-cache-dir fastapi==0.115.12 uvicorn==0.34.2 python-multipart==0.0.20 httpx==0.28.1 arjun==2.2.7 PyYAML==6.0.2
 WORKDIR /app
 COPY --chown=zap:zap app /app/app
 RUN test -s /app/app/nuclei-templates/technology-headers.yaml

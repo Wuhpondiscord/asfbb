@@ -74,3 +74,11 @@ ARJUN_PREFER_DYNAMIC_ENDPOINTS = True
 DALFOX_WORKERS = 1
 DALFOX_HTTP_TIMEOUT_SECONDS = 5
 DALFOX_FINDINGS_LIMIT = 100
+
+# Per-scan template selections; custom and community templates are restricted to
+# read-only HTTP paths, checked against the exact target origin.
+NUCLEI_COMMUNITY_MAX = 8
+NUCLEI_CUSTOM_MAX = 3
+NUCLEI_CUSTOM_MAX_BYTES = 20000
+NUCLEI_MAX_REQUESTS_PER_TEMPLATE = 2
+NUCLEI_CATALOG_PAGE_SIZE = 30
