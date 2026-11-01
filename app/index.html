@@ -100,17 +100,30 @@ async function scan(){
  await refresh();const eligible=Array.from(selectedIds).filter(id=>assets.some(a=>a.id===id&&a.compatibility==='web'));
  const ids=eligible.slice(0,1000);
  if(!ids.length)return message('No selected web-compatible URLs can be sent to the HTTP scanner. Other scope types remain selectable for review; scan them only with a purpose-built module.',true);
- let modules;try{modules=enabledModules();validateNumericSettings()}catch(e){return message(e.message,true)}
- if(!modules.length)return message('Choose at least one pipeline module.',true);const active=modules.some(m=>['ffuf','arjun','dalfox','sqlmap'].includes(m));if(active&&ids.length>100)return message('Active review allows up to 100 approved targets per batch.',true);if(active&&!el('activeConsent').checked)return message('Confirm active review authorization under Settings.',true);
+ let modules,scanOptions;
+ try{modules=enabledModules();scanOptions=pipelineOptions()}catch(e){return message(e.message,true)}
+ if(!modules.length)return message('Choose at least one pipeline module.',true);
+ if(modules.includes('nuclei')){
+  try{
+   const check=await api('/nuclei/validate',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify(scanOptions.nuclei)});
+   if(!check.valid){
+    el('nucleiReady').textContent=check.message+' ('+check.per_target_requests+'/'+check.max_job_requests+' estimated requests per target/job)';
+    return message('Nuclei preflight blocked this scan: '+check.message,true);
+   }
+   el('nucleiReady').textContent='Validated '+check.templates.length+' templates, estimated '+check.per_target_requests+' requests per target; up to '+check.max_targets_within_budget+' targets per Nuclei job.';
+  }catch(e){return message('Nuclei preflight failed before queuing: '+e.message,true);}
+ }
+const active=modules.some(m=>['ffuf','arjun','dalfox','sqlmap'].includes(m));if(active&&ids.length>100)return message('Active review allows up to 100 approved targets per batch.',true);if(active&&!el('activeConsent').checked)return message('Confirm active review authorization under Settings.',true);
  if(!el('policy').checked)return message('Confirm the program policy first.',true);
  try{
   let r;
   if(ids.length===1){
-   const body={asset_id:ids[0],policy_confirmed:true,user_agent:el('agent').value,max_requests:Number(el('requests').value),delay_seconds:Number(el('delay').value),account_id:el('account').value||null,modules:modules,options:pipelineOptions(),active_confirmed:el("activeConsent").checked};
+   const body={asset_id:ids[0],policy_confirmed:true,user_agent:el('agent').value,max_requests:Number(el('requests').value),delay_seconds:Number(el('delay').value),account_id:el('account').value||null,modules:modules,options:scanOptions,active_confirmed:el("activeConsent").checked};
    r=await api('/scans',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   }else{
    if(el('account').value)return message('Batch scans do not currently support an authenticated account. Choose Anonymous or scan one asset.',true);
-   const body={asset_ids:ids,policy_confirmed:true,user_agent:el('agent').value,delay_seconds:Number(el('delay').value),modules:modules,options:pipelineOptions(),active_confirmed:el("activeConsent").checked};
+   const body={asset_ids:ids,policy_confirmed:true,user_agent:el('agent').value,delay_seconds:Number(el('delay').value),modules:modules,options:scanOptions,active_confirmed:el("activeConsent").checked};
    r=await api('/scans/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   }
   for(const id of ids)selectedIds.delete(id);render();message('Queued '+ids.length+' web scan'+(ids.length===1?'':'s')+'. '+selectedIds.size+' other targets still selected.');await loadScans();
