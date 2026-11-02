@@ -100,9 +100,9 @@ def choose_arjun_target(primary, discovered, host):
         path = parts.path.lower()
         if parts.query:
             return 3
-        if "/api/" in path or path.endswith((".php", ".aspx", ".jsp", ".json")):
+        if "/api/" in path or path.endswith((".php", ".aspx", ".jsp", ".cgi")):
             return 2
-        if path.endswith((".js", ".css", ".svg", ".png", ".jpg", ".woff")):
+        if path.endswith((".js", ".css", ".svg", ".png", ".jpg", ".woff", ".json", ".map", ".ico", ".webmanifest")):
             return -1
         return 0
     best = max(candidates, key=score, default=primary)

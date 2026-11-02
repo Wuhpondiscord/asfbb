@@ -56,13 +56,32 @@ async def katana(url, host, agent, depth=1, limit=None):
 async def nuclei(url, host, agent, urls=None, default_ids=None,
                  community_templates=None, custom_templates=None):
     """Run configured low-impact templates against selected exact-host URLs."""
-    targets = list(dict.fromkeys(
-        candidate for candidate in (urls if urls is not None else [url])
-        if isinstance(candidate, str) and in_host(candidate, host)
-    ))[:config.NUCLEI_TARGET_LIMIT]
     from .nuclei_catalog import builtins
     options = builtins()
     selected_ids = list(config.NUCLEI_DEFAULT_IDS) if default_ids is None else default_ids
+    discovered_urls = list(dict.fromkeys(
+        candidate for candidate in (urls if urls is not None else [url])
+        if isinstance(candidate, str) and in_host(candidate, host)
+    ))
+    # Exposure profiles probe fixed paths relative to the web origin. Running them
+    # on /app/main.js or /manifest.json can produce misleading or wasted requests.
+    origin = urlsplit(url)._replace(path="/", query="", fragment="").geturl()
+    exposure_profile = any(name.startswith("bounty-ultimate-") for name in selected_ids)
+    if exposure_profile:
+        targets = [origin]
+        scope_strategy = "origin-only exposure profile"
+    else:
+        def target_priority(candidate):
+            parts = urlsplit(candidate)
+            path = parts.path.lower()
+            static = path.endswith((".js", ".css", ".json", ".map", ".svg", ".png",
+                                    ".jpg", ".jpeg", ".gif", ".woff", ".woff2", ".ico", ".pdf"))
+            return (0 if candidate.rstrip("/") == origin.rstrip("/") else 1,
+                    2 if static else 0, len(path))
+        targets = sorted(dict.fromkeys([origin] + discovered_urls), key=target_priority)
+        scope_strategy = "prioritized page sample"
+    targets = targets[:config.NUCLEI_TARGET_LIMIT]
+    inventory_count = len(discovered_urls)
     templates = [options[name] for name in selected_ids]
     blobs = dict(community_templates or {})
     for index, yaml_source in enumerate(custom_templates or []):
@@ -132,12 +151,20 @@ async def nuclei(url, host, agent, urls=None, default_ids=None,
         info = obj.get("info") or {}
         if not isinstance(info, dict):
             info = {}
+        template_id = str(obj.get("template-id") or "")
+        matcher = str(obj.get("matcher-name") or "")
+        path = urlsplit(matched_url).path.lower()
+        file_candidate = template_id.startswith("bounty-ultimate-") and any(
+            token in path for token in ("/.git/", "/.env", "/backup.", "/dump.",
+                                        "/debug.log", "/appsettings.", "/terraform.tfstate",
+                                        "/docker-compose.", "/.npmrc", "/.aws/"))
         findings.append({
-            "name": info.get("name") or obj.get("template-id") or "Template match",
+            "name": info.get("name") or template_id or "Template match",
             "risk": str(info.get("severity", "info")).title().replace("Info", "Informational"),
             "confidence": "Low", "url": matched_url,
             "description": str(info.get("description") or "")[:1000],
-            "source": "nuclei", "template_id": obj.get("template-id")
+            "source": "nuclei", "template_id": template_id,
+            "matcher_name": matcher, "potential_file_exposure": file_candidate
         })
     diag = " | ".join(line[:180] for line in rows
                       if line.startswith(("[stderr]", "[diagnostic]")))
@@ -147,9 +174,14 @@ async def nuclei(url, host, agent, urls=None, default_ids=None,
     if budget_limited:
         diag = ("Template request budget limited coverage to " + str(len(targets)) +
                 " of " + str(requested_targets) + " scoped URLs. " + diag)
+    if exposure_profile and inventory_count > 1:
+        note = (f"Exposure templates evaluated at the web origin, not repeated "
+                f"on {inventory_count - 1} discovered asset paths. ")
+        diag = (note + diag)[:500]
     return {"status": status, "alerts": findings[:config.NUCLEI_FINDINGS_LIMIT],
             "templates": (list(selected_ids) + list(blobs)),
             "targets_checked": len(targets), "requested_targets": requested_targets,
+            "inventory_urls": inventory_count, "scope_strategy": scope_strategy,
             "estimated_requests_per_target": estimated_per_url,
             "reason": diag[:500]}
 
