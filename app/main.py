@@ -18,6 +18,7 @@ from .jwtcheck import inspect_jwt
 from .pipeline import katana, nuclei, gau, probe, in_host
 from .review import ACTIVE_MODULES, review, choose_arjun_target, choose_dalfox_target
 from . import config
+from .module_inputs import ModuleInputs
 from .web_modules import MODULES as WEB_MODULES, run_web_module
 
 from . import nuclei_catalog
@@ -73,6 +74,7 @@ class NucleiSettings(BaseModel):
     custom_templates: list[str] = Field(default_factory=list, max_length=config.NUCLEI_CUSTOM_MAX)
 
 class PipelineOptions(BaseModel):
+    inputs: ModuleInputs = Field(default_factory=ModuleInputs)
     nuclei: NucleiSettings = Field(default_factory=NucleiSettings)
     gau_mode: Literal["balanced", "expanded"] = config.GAU_MODE_DEFAULT
     endpoint_limit: int = Field(default=config.ENDPOINT_LIMIT_DEFAULT, ge=1, le=config.ENDPOINT_LIMIT_MAX)
@@ -171,6 +173,33 @@ async def validate_nuclei_configuration(selection: NucleiSettings):
         raise HTTPException(422, str(exc)[:240])
     except httpx.HTTPError as exc:
         raise HTTPException(503, "Community template retrieval failed: " + str(exc)[:140])
+
+
+class TemplateDraftRequest(BaseModel):
+    provider: Literal["keyless", "gemini"] = "keyless"
+    name: str = Field(default="Observation", min_length=3, max_length=100)
+    path: str = Field(default="/", min_length=1, max_length=120)
+    word: str = Field(default="Example", min_length=1, max_length=200)
+    description: str = Field(default="", max_length=2000)
+
+
+@app.get("/api/nuclei/drafting", dependencies=[Depends(authorize)])
+async def drafting_status():
+    return {"keyless": True, "gemini": bool(os.environ.get("GEMINI_API_KEY") and os.environ.get("GEMINI_MODEL"))}
+
+
+@app.post("/api/nuclei/draft", dependencies=[Depends(authorize)])
+async def draft_template(spec: TemplateDraftRequest):
+    from . import template_builder
+    try:
+        content = (await template_builder.gemini_draft(spec.description) if spec.provider == "gemini" else
+                   template_builder.build_draft(spec.name, spec.path, spec.word))
+        await template_builder.validate_draft(content)
+        return {"yaml": content, "validated": True, "executed": False, "provider": spec.provider}
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+    except (ValueError, KeyError, TypeError, httpx.HTTPError):
+        raise HTTPException(422, "Draft generation or validation failed; no template was executed")
 
 
 @app.get("/api/nuclei/templates", dependencies=[Depends(authorize)])
@@ -294,10 +323,13 @@ async def create_scan(spec: ScanRequest, request: Request):
         if (existing.get("owner") == request.state.sid
                 and existing.get("asset_id") == spec.asset_id
                 and existing.get("status") in ("queued", "running")
-                and existing.get("modules") == spec.modules):
+                and existing.get("modules") == spec.modules
+                and not (spec.options.inputs.source_text or spec.options.inputs.sbom_text or spec.options.inputs.llm_path)
+                and existing.get("options", {}).get("inputs", {}).get("api_target", False) == spec.options.inputs.api_target):
             return {"id": existing["id"], "status": existing["status"], "reused": True}
     identifier = uuid.uuid4().hex
     recorded_options = spec.options.model_dump()
+    recorded_options["inputs"] = spec.options.inputs.public_summary()
     recorded_options["nuclei"]["custom_templates"] = [
         "[inline template]" for _ in spec.options.nuclei.custom_templates]
     jobs[identifier] = {"owner": request.state.sid, "id": identifier, "asset_id": spec.asset_id, "target": url,
@@ -319,6 +351,8 @@ class BatchRequest(BaseModel):
 
 @app.post("/api/scans/batch", dependencies=[Depends(authorize)])
 async def batch_scans(payload: BatchRequest, request: Request):
+    if len(payload.asset_ids) > 1 and (payload.options.inputs.source_text or payload.options.inputs.sbom_text):
+        raise HTTPException(422, "Attach source/SBOM input to one selected asset per job")
     if ACTIVE_MODULES.intersection(payload.modules) and (len(payload.asset_ids) > config.ACTIVE_BATCH_LIMIT or not payload.active_confirmed):
         raise HTTPException(422, "Active review requires authorization and at most 100 targets")
     if not payload.policy_confirmed:
@@ -582,9 +616,20 @@ async def run_scan_job(identifier, spec):
                     job["alerts"].extend(result["alerts"])
                 elif module in WEB_MODULES:
                     result = await run_web_module(
-                        module, url, host, spec.user_agent, spec.delay_seconds, endpoints)
+                        module, url, host, spec.user_agent, spec.delay_seconds, endpoints, spec.options.inputs)
                     job["reviews"].append(result)
                     job["alerts"].extend(result.get("alerts", []))
+                    job["probes"].extend(result.get("probes", []))
+                    if result.get("hosts"):
+                        job.setdefault("discovered_hosts", []).extend(result["hosts"])
+                    if result.get("endpoints"):
+                        for candidate in result["endpoints"]:
+                            if in_host(candidate, host):
+                                endpoint_sources.setdefault(candidate, []).append(module)
+                                if candidate not in endpoints:
+                                    endpoints.append(candidate)
+                        endpoints = endpoints[:spec.options.endpoint_limit]
+                        job["endpoints"] = endpoints[1:]
                 elif module in ACTIVE_MODULES:
                     review_url = (choose_arjun_target(url, endpoints, host)
                                   if module == "arjun" else

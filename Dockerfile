@@ -10,6 +10,12 @@ RUN curl -fsSL -o /tmp/s.tar.gz https://github.com/sqlmapproject/sqlmap/archive/
 RUN curl -fsSL -o /tmp/nikto.tar.gz https://github.com/sullo/nikto/archive/refs/tags/2.6.1.tar.gz && mkdir -p /opt/nikto && tar -xzf /tmp/nikto.tar.gz -C /opt/nikto --strip-components=1
 RUN curl -fsSL -o /tmp/testssl.tar.gz https://github.com/testssl/testssl.sh/archive/refs/tags/v3.2.4.tar.gz && mkdir -p /opt/testssl && tar -xzf /tmp/testssl.tar.gz -C /opt/testssl --strip-components=1
 
+RUN curl -fsSL -o /tmp/trufflehog.tgz https://github.com/trufflesecurity/trufflehog/releases/download/v3.99.7/trufflehog_3.99.7_linux_amd64.tar.gz && tar -xzf /tmp/trufflehog.tgz -C /usr/local/bin trufflehog
+RUN curl -fsSL -o /tmp/trivy.tgz https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz && tar -xzf /tmp/trivy.tgz -C /usr/local/bin trivy
+RUN curl -fsSL -o /usr/local/bin/osv-scanner https://github.com/google/osv-scanner/releases/download/v2.7.0/osv-scanner_linux_amd64 && chmod +x /usr/local/bin/osv-scanner
+RUN curl -fsSL -o /tmp/kr.tgz https://github.com/assetnote/kiterunner/releases/download/v1.0.2/kiterunner_1.0.2_linux_amd64.tar.gz && tar -xzf /tmp/kr.tgz -C /usr/local/bin kr
+RUN curl -fsSL -o /tmp/amass.zip https://github.com/owasp-amass/amass/releases/download/v4.2.0/amass_Linux_amd64.zip && unzip -oq /tmp/amass.zip -d /tmp/amass && install -m 0755 /tmp/amass/amass_Linux_amd64/amass /usr/local/bin/amass
+
 FROM ruby:3.3.13-slim-bookworm AS wp-tools
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential libcurl4-openssl-dev libffi-dev libyaml-dev zlib1g-dev && rm -rf /var/lib/apt/lists/*
 RUN gem install wpscan -v 4.2.0 --no-document
@@ -23,9 +29,24 @@ RUN mkdir -p /opt/retire-db && node -e "fetch('https://raw.githubusercontent.com
 FROM python:3.12-slim-bookworm AS wapiti-tools
 RUN python -m venv --copies /opt/wapiti && /opt/wapiti/bin/pip install --no-cache-dir wapiti3==3.3.2
 
+FROM python:3.12-slim-bookworm AS final-python-tools
+RUN python -m venv --copies /opt/depscan && /opt/depscan/bin/pip install --no-cache-dir owasp-depscan==6.3.0
+RUN python -m venv --copies /opt/nettacker && /opt/nettacker/bin/pip install --no-cache-dir nettacker==0.4.1
+# Deliberately install only dependencies used by the remote REST/probe/detector profile;
+# no local model backends or GPU frameworks are used in the HF integration.
+RUN python -m venv --copies /opt/garak && /opt/garak/bin/pip install --no-cache-dir --no-deps garak==0.17.1 && /opt/garak/bin/pip install --no-cache-dir requests backoff jsonpath-ng PyYAML xdg-base-dirs colorama tqdm
+
 FROM zaproxy/zap-stable
 USER root
 COPY --from=wp-tools /usr/local/ /usr/local/
+COPY --from=final-python-tools /opt/depscan /opt/depscan
+COPY --from=final-python-tools /opt/nettacker /opt/nettacker
+COPY --from=final-python-tools /opt/garak /opt/garak
+COPY --from=pd-tools /usr/local/bin/trufflehog /usr/local/bin/trufflehog
+COPY --from=pd-tools /usr/local/bin/trivy /usr/local/bin/trivy
+COPY --from=pd-tools /usr/local/bin/osv-scanner /usr/local/bin/osv-scanner
+COPY --from=pd-tools /usr/local/bin/kr /usr/local/bin/kr
+COPY --from=pd-tools /usr/local/bin/amass /usr/local/bin/amass
 COPY --from=js-tools /usr/local/bin/node /usr/local/bin/node
 COPY --from=js-tools /usr/local/lib/node_modules/retire /opt/retire
 COPY --from=js-tools /opt/retire-db /opt/retire-db
@@ -49,7 +70,7 @@ WORKDIR /app
 COPY --chown=zap:zap app /app/app
 RUN test -s /app/app/nuclei-templates/technology-headers.yaml
 COPY --chown=zap:zap start.sh /app/start.sh
-RUN chmod +x /app/start.sh && mkdir -p /app/data /home/zap/.cache/wpscan && cp -a /opt/wpscan-db /home/zap/.cache/wpscan/db && chown -R zap:zap /app/data /home/zap/.cache/wpscan && ldconfig
+RUN chmod +x /app/start.sh && mkdir -p /app/data/scanner-cache /home/zap/.cache/wpscan && cp -a /opt/wpscan-db /home/zap/.cache/wpscan/db && chown -R zap:zap /app/data /home/zap/.cache/wpscan && ldconfig
 USER zap
 ENV GEM_HOME="/usr/local/bundle"
 ENV PATH="/opt/asfb-venv/bin:/usr/local/bundle/bin:$PATH" PYTHONUNBUFFERED=1

@@ -14,7 +14,9 @@ from . import config
 from .pipeline import execute, in_host
 from .scope import public_host
 
-MODULES = {"nikto", "wpscan", "testssl", "wapiti", "retirejs"}
+from .final_module_names import FINAL_MODULES
+
+MODULES = {"nikto", "wpscan", "testssl", "wapiti", "retirejs"} | FINAL_MODULES
 
 
 def same_origin(candidate, target):
@@ -188,9 +190,12 @@ def command(module, target, host, agent, report, delay):
     raise ValueError("Unknown web module")
 
 
-async def run_web_module(module, url, host, agent, delay=1.5, discovered=None):
+async def run_web_module(module, url, host, agent, delay=1.5, discovered=None, inputs=None):
     if module not in MODULES or not in_host(url, host):
         raise ValueError("Invalid module or out-of-scope web target")
+    if module in FINAL_MODULES:
+        from .final_modules import run
+        return await run(module, url, host, agent, delay, inputs)
     if module in ("wapiti", "retirejs"):
         from . import client_modules
         if module == "retirejs":

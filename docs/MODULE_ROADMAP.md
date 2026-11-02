@@ -27,25 +27,33 @@ All implemented modules work without API keys. WPScan runs its inventory profile
 
 Both modules appear in Settings, Enable all modules, source filters and stage logs. Sampling failures and guard limits are reported explicitly. Tests include the actual installed Retire.js scanner on a synthetic JS fixture and the actual installed Wapiti engine behind a mocked HTTP transport; they send no live-target traffic.
 
-## Requested next groups
+## Final group: remaining integrations
 
-| Requested feature | State | Intended input / applicability gate |
+All requested integrations now have working bounded entry points. Modules requiring a source artifact, SBOM, API designation or LLM definition skip when that context is absent, even under Enable all modules. These are the HF profiles below; they are not promises of every upstream feature.
+
+| Tool / feature | Implemented profile | Limits / applicability |
 | --- | --- | --- |
-| More [Nuclei templates](https://docs.projectdiscovery.io/templates/introduction) | Two added; further expansion WIP | Reviewed HTTP templates, technology gates, exact-origin constraints, existing request budgets and validation. |
-| [Gemini Nuclei template generation](https://ai.google.dev/gemini-api/docs/structured-output) | Deferred under keyless preference | Hosted Gemini generation needs API credentials, so it is not part of the keyless pipeline. Any future optional integration would use a separate draft-generation action with a Space secret and configurable model. Generated templates must pass existing template restrictions and Nuclei validation before explicit selection. Do not auto-run generated YAML. |
-| [Wapiti](https://github.com/wapiti-scanner/wapiti) | Limited profile implemented | Further profiles need separately reviewed request/method limits. |
-| [Retire.js](https://github.com/RetireJS/retire.js) | Implemented for web JavaScript | Source/SBOM upload workflows remain future work. |
-| [TruffleHog](https://github.com/trufflesecurity/trufflehog) | Planned | Explicit repository/artifact input on remote infrastructure. Redacted secret findings; verification behavior must be explicit. |
-| [OWASP Amass](https://github.com/owasp-amass/amass) | Planned | Passive domain discovery first. Newly discovered subdomains are inventory and do not automatically become authorized scan targets. |
-| [OWASP dep-scan](https://github.com/owasp-dep-scan/dep-scan) | Planned | Source, SBOM or container artifact; a URL-only job is inapplicable. |
-| [Trivy](https://github.com/aquasecurity/trivy) (requested as “trivvy”) | Planned | Explicit image, repository, filesystem artifact or SBOM. No Docker daemon assumed inside the HF runtime. |
-| [Kiterunner](https://github.com/assetnote/kiterunner) | Planned | Explicit API target, small reviewed route dictionary, method restrictions and request budget; no unrestricted large route sets by default. |
-| [OSV-Scanner](https://github.com/google/osv-scanner) | Planned | Supported lockfiles, SBOM or image/source artifact; skip URL-only jobs. |
-| [garak](https://github.com/NVIDIA/garak) | Optional, planned | Separately configured LLM endpoint/provider and probe allowlist. A normal website is not automatically an LLM target. |
-| [OWASP Nettacker](https://github.com/OWASP/Nettacker) | Optional, partial integration planned | User-confirmed project. Consider HTTP checks on permitted ports first; do not assume raw sockets, arbitrary outbound ports, or broad network scans work in HF. |
+| TruffleHog 3.99.7 | Supplied source-text scan | No repository cloning, archive extraction, secret verification or live credential requests. Secret values, snippets and tool raw reports are discarded; only redacted detector summaries are returned. |
+| OWASP Amass 4.2.0 | Standalone passive enumeration of the selected hostname | v4 is intentionally pinned for a single-container HF deployment; current v5 requires a collection-engine service. External providers can time out or return no data without a key. Discovered hostnames remain separate inventory and never become scan targets automatically. |
+| OWASP dep-scan 6.3.0 | Supplied application CycloneDX SBOM | Smaller public app-only 2024+ database, lazily downloaded to HF cache on first applicable scan. No source builds, container daemon, OS database or reachability analysis. Preparation is bounded; unavailable databases produce unavailable coverage, not a clean result. |
+| Trivy 0.76.1 | Supplied CycloneDX SBOM | Public keyless advisory DB cached in HF; no container daemon needed. No filesystem/image/kubernetes scanning in this profile. |
+| OSV-Scanner 2.7.0 | Supplied CycloneDX SBOM | Queries public OSV with package names/versions; no API key. No automatic repository download or source execution. |
+| Kiterunner 1.0.2 | Eight reviewed GET routes at the selected origin | Requires explicit API-target checkbox; one connection, configured pause, no redirects, no large dictionaries or guessed POST payloads. Observed URLs can feed later same-host stages. |
+| OWASP Nettacker 0.4.1 | Partial HTTP-status profile using its installed HTTP engine and upstream module conditions | One exact-URL request; no network/port/credential scan, extra services, graph DB or API-key requirement. |
+| garak 0.17.1 | Installed REST generator, test-signature prompts and EICAR detector | Requires a same-origin keyless REST LLM endpoint with simple request/response JSON fields. Two benign antivirus-signature checks, applicable when the LLM is expected to filter them. No local model, GPU or provider SDKs; no broad jailbreak benchmark. Model replies are not returned or saved. |
+| Nuclei keyless template builder | Deterministic read-only GET observation draft | Always available; validated by the server restrictions and installed Nuclei syntax validator. Generates a draft only; user must review/select it in Custom templates. |
+| Optional Gemini drafting | Gemini REST API draft adapter | Disabled until GEMINI_API_KEY and GEMINI_MODEL are supplied as Space configuration. This optional provider necessarily needs credentials; it never becomes a pipeline requirement. Generated drafts pass the same restrictions and installed Nuclei validation. |
 
-No placeholder scanner is represented as installed. Check each group's upstream docs again when implementing it because CLI flags, output formats and provider interfaces change.
+### Supplying context
+
+Use Settings → Artifact and specialized module inputs. Source text is limited to 200,000 characters; an application CycloneDX SBOM may contain at most 300 named/versioned components with package URLs. Extra metadata and external references are stripped. Source/SBOM scans attach to one selected asset per job. Submitted content stays in the in-memory job specification and HF temporary directories; job status contains counts instead of content. Use Anonymous for these stages under the existing active-testing confirmation.
+
+Temporary scanner inputs and reports are removed after each stage. Public advisory databases may be cached in /app/data/scanner-cache and can be lost when an HF Space restarts. Initial DB preparation may take up to 180 seconds per scanner; the dep-scan app-only database is about 2 GiB unpacked. The full OS database is not downloaded. No cache preparation occurs for URL-only jobs without SBOM input.
+
+No input source or SBOM is executed, installed as an application, uploaded to a repository, or used to expand target authorization. TruffleHog does not verify detected credentials. OSV uses its documented advisory service; dep-scan/Trivy use downloaded public advisory databases.
 
 ## Validation
 
 GitHub Actions runs offline mocked scanner/API tests, syntax checks, and builds the real image. Container checks verify the actual tool help flags and run the Ruby origin/redirect guard tests without target traffic. The existing deployment pushes main to wuhp/bbscanner only after checks pass. No live target scans are part of verification.
+
+The final-group CI checks exercise the installed TruffleHog detector on an isolated generated fixture, installed garak REST/detector code and Nettacker HTTP engine with mocked requests, and validate the dependency/route scanner CLI options. Provider outages and HF runtime DB downloads are not proven by offline CI.

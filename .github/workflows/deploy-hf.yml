@@ -22,7 +22,7 @@ jobs:
           ZAP_API_KEY: test-key
         run: python3 -m pytest -q tests/
       - name: Validate Python backend syntax
-        run: python3 -m py_compile app/main.py app/pipeline.py app/web_modules.py app/client_modules.py app/wapiti_guard.py app/wapiti_runner.py app/config.py app/review.py app/zap_control.py app/scope.py app/jwtcheck.py app/storage.py
+        run: python3 -m py_compile app/main.py app/pipeline.py app/web_modules.py app/client_modules.py app/wapiti_guard.py app/wapiti_runner.py app/config.py app/module_inputs.py app/final_modules.py app/final_module_names.py app/nettacker_runner.py app/garak_runner.py app/template_builder.py app/review.py app/zap_control.py app/scope.py app/jwtcheck.py app/storage.py
       - name: Validate dashboard JavaScript syntax
         run: |
           python3 - <<'PY'
@@ -37,6 +37,28 @@ jobs:
         run: |
           docker build --progress plain -t asfb-ci .
           docker run --rm -v "$PWD/tests:/app/tests:ro" --entrypoint /bin/sh asfb-ci -ec '
+            /usr/local/bin/trufflehog filesystem --help > /tmp/trufflehog-help
+            grep -q -- "--no-verification" /tmp/trufflehog-help
+            /opt/asfb-venv/bin/python /app/tests/trufflehog_offline_smoke.py
+            /usr/local/bin/trivy sbom --help > /tmp/trivy-help
+            grep -q -- "--skip-db-update" /tmp/trivy-help
+            /usr/local/bin/osv-scanner scan source --help > /tmp/osv-help
+            grep -q -- "--sbom" /tmp/osv-help
+            grep -q -- "--output" /tmp/osv-help
+            /usr/local/bin/kr brute --help > /tmp/kr-help
+            grep -q -- "--max-redirects" /tmp/kr-help
+            grep -q -- "--force-method" /tmp/kr-help
+            grep -q -- "--delay" /tmp/kr-help
+            /usr/local/bin/amass enum -help > /tmp/amass-help 2>&1 || true
+            grep -q -- "-passive" /tmp/amass-help
+            grep -q -- "-timeout" /tmp/amass-help
+            /opt/depscan/bin/depscan --help > /tmp/depscan-help
+            grep -q -- "--bom" /tmp/depscan-help
+            grep -q -- "--reachability-analyzer" /tmp/depscan-help
+            /opt/depscan/bin/depscan-vdb download --help > /tmp/depscan-vdb-help
+            grep -q -- "--scope" /tmp/depscan-vdb-help
+            /opt/garak/bin/python /app/tests/final_python_smoke.py garak
+            /opt/nettacker/bin/python /app/tests/final_python_smoke.py nettacker
             /usr/local/bin/node /opt/retire/lib/cli.js --help > /tmp/retire-help
             grep -q -- "--path" /tmp/retire-help
             grep -q -- "--jsrepo" /tmp/retire-help
