@@ -533,8 +533,8 @@ async def run_scan_job(identifier, spec):
                         job["probes"] = result["probes"]
                     elif module == "zap-passive":
                         async with httpx.AsyncClient(timeout=20, trust_env=False) as control:
-                        await zap_call(control, "core", "action/newSession", {})
-                    # Only the primary target is fetched through ZAP. Additional
+                            await zap_call(control, "core", "action/newSession", {})
+                        # Only the primary target is fetched through ZAP. Additional
                         # discovered URLs are not automatically crawled by ZAP.
                         headers = {"User-Agent": spec.user_agent}
                         profile = accounts.get(spec.account_id) if spec.account_id else None
