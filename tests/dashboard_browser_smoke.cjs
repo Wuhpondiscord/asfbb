@@ -7,7 +7,8 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
  const page = await browser.newPage({viewport:{width:1440,height:1000},reducedMotion:'reduce'});
  page.setDefaultTimeout(10000);
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
- const html=fs.readFileSync('app/index.html','utf8'),now=Date.now()/1000;
+ let html=fs.readFileSync('app/index.html','utf8');const now=Date.now()/1000;
+ let builtinInfo={templates:[{id:'technology-headers'}],default_ids:['technology-headers']};
  const jobs=[
   {id:'job-one',target:'https://alpha.example.org/',status:'running',created:now-20,stage:'idor-forge',progress:50,request_count:0,modules:['idor-forge'],pipeline:{'idor-forge':'running'},alerts:[],endpoints:[],stage_details:{}},
   {id:'job-two',target:'https://beta.example.org/',status:'partial',created:now-60,stage:'partial',progress:100,request_count:1,modules:['gau'],pipeline:{gau:'timeout'},alerts:[],endpoints:[],stage_details:{gau:{status:'timeout',elapsed_ms:12000,reason:'Common Crawl deadline',summary:'Partial archive coverage'}}},
@@ -27,6 +28,7 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
   const u=new URL(route.request().url());
   assert.equal(u.hostname,'asfb.test','Unexpected live network request');
   let data={};
+  if(u.pathname==='/preferences.js')return route.fulfill({contentType:'text/javascript',body:fs.readFileSync('app/preferences.js','utf8')});
   if(u.pathname==='/')return route.fulfill({contentType:'text/html',body:html});
   if(u.pathname==='/api/assets')data={assets:importedAssets};
   else if(u.pathname==='/api/import/text'){
@@ -49,7 +51,7 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
          warnings:request.order_mode==='manual'?['Manual fixture ordering warning']:[],handoffs:[{from:'gau',to:'katana',data:'URL inventory',available:true}],
          coverage_profile:request.coverage_profile,budgets:{retire_files:8,retire_bytes:2097152,dalfox_scan_seconds:60,dalfox_payloads:12,amass_timeout:95}};
   }
-  else if(u.pathname==='/api/nuclei/defaults')data={templates:[{id:'technology-headers'}],default_ids:['technology-headers']};
+  else if(u.pathname==='/api/nuclei/defaults')data=builtinInfo;
   return route.fulfill({contentType:'application/json',headers:{'X-ASFB-Session':'offline-browser-session'},body:JSON.stringify(data)});
  });
  await page.goto('http://asfb.test/');
@@ -171,6 +173,89 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
    await page.screenshot({path:'ui-review/'+name+'-'+width+'.png',fullPage:true});
   }
  }
+
+ // Real browser cookie round-trip, with every HTTP request still mocked.
+ await page.setViewportSize({width:1440,height:1000});
+ await page.locator('#tab-settings').click();
+ await page.locator('[data-settings="pipeline"]').click();
+ await page.locator('button[onclick="setBaselinePipeline()"]').click();
+ await page.locator('#modRetirejs').check();
+ await page.locator('#settingsZapWait').fill('240');
+ await page.locator('#settingsLimit').fill('225');
+ await page.locator('#coverageProfile').selectOption('thorough');
+ await page.locator('#settingsParallel').selectOption('2');
+ await page.locator('#pipelineMode').selectOption('manual');
+ const customOrder=await page.evaluate(()=>el('settingsOrder').defaultValue.split(',').map(s=>s.trim()).reverse().join(', '));
+ await page.locator('#settingsOrder').fill(customOrder);
+ await page.locator('[data-settings="inputs"]').click();
+ await page.locator('#moduleSource').fill('fixture-private-source');
+ await page.locator('#moduleSbom').fill('fixture-private-sbom');
+ await page.locator('#moduleTrufflehogVerify').check();
+ await page.locator('#moduleIdorValues').fill('fixture-private-id');
+ await page.locator('[data-settings="identity"]').click();
+ await page.locator('#acookie').fill('fixture-private-auth-cookie');
+ await page.locator('#jwt').fill('fixture-private-jwt');
+ await page.locator('[data-settings="nuclei"]').click();
+ await page.locator('#nucleiBuiltins input').first().uncheck();
+ await page.locator('#nucleiCustom').fill('fixture-private-custom-template');
+ await page.evaluate(()=>{
+  el('policy').checked=true;el('activeConsent').checked=true;
+  nucleiCommunityPaths.add('http/exposures/configs/example.yaml');renderNucleiCommunity();
+  preferenceStore.flush();
+ });
+ let cookies=await page.context().cookies();
+ assert(cookies.some(c=>c.name==='asfb_pref_pipeline'&&c.expires>Date.now()/1000));
+ assert(!JSON.stringify(cookies).includes('fixture-private'));
+ assert(!cookies.some(c=>c.name.includes('TrufflehogVerify')));
+ await page.reload();
+ await page.waitForFunction(()=>document.querySelector('#nucleiBuiltins').dataset.initialized==='true');
+ assert.equal(await page.locator('#settingsZapWait').inputValue(),'240');
+ assert.equal(await page.locator('#settingsLimit').inputValue(),'225');
+ assert.equal(await page.locator('#coverageProfile').inputValue(),'thorough');
+ assert.equal(await page.locator('#pipelineMode').inputValue(),'manual');
+ assert.equal(await page.locator('#settingsOrder').inputValue(),customOrder);
+ assert.equal(await page.locator('#parallelJobs').inputValue(),'2');
+ assert.equal(await page.locator('#settingsParallel').inputValue(),'2');
+ assert(await page.locator('#modRetirejs').isChecked());
+ assert(!(await page.locator('#modNuclei').isChecked()));
+ assert.equal(await page.locator('#reports').inputValue(),'');
+ assert(!(await page.locator('#nucleiBuiltins input').first().isChecked()));
+ assert(await page.evaluate(()=>nucleiCommunityPaths.has('http/exposures/configs/example.yaml')));
+ for(const id of ['moduleSource','moduleSbom','moduleIdorValues','acookie','jwt','nucleiCustom'])
+  assert.equal(await page.locator('#'+id).inputValue(),'');
+ for(const id of ['policy','activeConsent','moduleTrufflehogVerify'])
+  assert(!(await page.locator('#'+id).isChecked()));
+ // A new release adds a setting and builtin: existing saved choices survive.
+ html=html.replace('id="settingsHttpx" type="number" value="10"','id="settingsHttpx" type="number" value="12"');
+ html=html.replace('const names={"gau":','const names={"future":"modFuture","gau":')
+  .replaceAll('gau, katana, httpx, zap-passive','gau, katana, httpx, future, zap-passive')
+  .replace('<p id="moduleSearchEmpty"','<label class="module-card" data-module-search="future"><input id="modFuture" type="checkbox"/><span>Future module</span></label><p id="moduleSearchEmpty"');
+ builtinInfo={templates:[{id:'technology-headers'},{id:'future-default'}],default_ids:['technology-headers','future-default']};
+ await page.reload();
+ await page.waitForFunction(()=>document.querySelector('#nucleiBuiltins input[value="future-default"]'));
+ assert.equal(await page.locator('#settingsHttpx').inputValue(),'12');
+ assert.equal(await page.locator('#settingsOrder').inputValue(),customOrder+', future');
+ assert(!(await page.locator('#modFuture').isChecked()));
+ assert.equal(await page.locator('#settingsZapWait').inputValue(),'240');
+ assert(!(await page.locator('#nucleiBuiltins input[value="technology-headers"]').isChecked()));
+ assert(await page.locator('#nucleiBuiltins input[value="future-default"]').isChecked());
+ // Invalid values cannot reset unrelated settings.
+ await page.evaluate(()=>{
+  const name='asfb_pref_pipeline=';
+  const raw=document.cookie.split(';').map(s=>s.trim()).find(s=>s.startsWith(name));
+  const data=JSON.parse(decodeURIComponent(raw.slice(name.length)));
+  data.values.settingsLimit='invalid';data.values.futureSetting={kept:true};
+  document.cookie=name+encodeURIComponent(JSON.stringify(data))+'; Path=/; SameSite=Lax';
+ });
+ await page.reload();
+ await page.waitForFunction(()=>document.querySelector('#nucleiBuiltins').dataset.initialized==='true');
+ assert.equal(await page.locator('#settingsLimit').inputValue(),'100');
+ assert.equal(await page.locator('#settingsZapWait').inputValue(),'240');
+ await page.evaluate(()=>{el('settingsZapWait').value='180';preferenceStore.flush()});
+ const data=await page.evaluate(()=>JSON.parse(decodeURIComponent(document.cookie.split(';').map(s=>s.trim()).find(s=>s.startsWith('asfb_pref_pipeline=')).split('=').slice(1).join('='))));
+ assert.deepEqual(data.values.futureSetting,{kept:true});
+ assert.equal(data.values.settingsZapWait,180);
+
  assert.deepEqual(errors,[]);
  await browser.close();
  console.log('Dashboard browser checks passed: settings order, module inputs, job filters, status dots, stable details, job logs, search, pause and responsive layouts');

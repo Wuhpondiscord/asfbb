@@ -25,3 +25,11 @@ def test_over_hundred_active_targets_rejected():
         response=client.post("/api/scans/batch",json=payload)
         assert response.status_code == 422
         assert "100" in response.json()["detail"]
+
+
+def test_passive_wait_budget_defaults_to_two_minutes_and_is_bounded():
+    assert main.PipelineOptions().zap_wait_seconds == 120
+    assert main.PipelineOptions(zap_wait_seconds=300).zap_wait_seconds == 300
+    for value in (0, 14, 301):
+        with pytest.raises(ValueError):
+            main.PipelineOptions(zap_wait_seconds=value)

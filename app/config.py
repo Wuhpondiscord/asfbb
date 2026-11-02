@@ -39,8 +39,10 @@ GAU_BREAKER_COOLDOWN_SECONDS = 900
 ARJUN_TIMEOUT_SECONDS = 85
 DALFOX_TIMEOUT_SECONDS = 65
 
-# Wait briefly for ZAP to drain its asynchronous passive-scan queue before reading alerts.
-ZAP_PASSIVE_POLL_LIMIT = 30
+# Allow large responses to finish passive rules; keep a hard per-job wait budget.
+ZAP_PASSIVE_WAIT_SECONDS_DEFAULT = 120
+ZAP_PASSIVE_WAIT_SECONDS_MAX = 300
+ZAP_PASSIVE_POLL_LIMIT = 400
 ZAP_PASSIVE_POLL_SECONDS = 0.75
 
 # One GAU archive source is selected at a time; change after validating availability.

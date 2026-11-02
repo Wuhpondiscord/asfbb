@@ -97,6 +97,7 @@ class PipelineOptions(BaseModel):
     katana_depth: int = Field(default=config.KATANA_DEPTH_DEFAULT, ge=1, le=config.KATANA_DEPTH_MAX)
     zap_endpoint_limit: int = Field(default=config.ZAP_ENDPOINT_LIMIT_DEFAULT, ge=1, le=config.ZAP_ENDPOINT_LIMIT_MAX)
     request_budget: int = Field(default=config.ZAP_REQUEST_BUDGET_DEFAULT, ge=1, le=config.ZAP_REQUEST_BUDGET_MAX)
+    zap_wait_seconds: int = Field(default=config.ZAP_PASSIVE_WAIT_SECONDS_DEFAULT, ge=15, le=config.ZAP_PASSIVE_WAIT_SECONDS_MAX)
     discovery_first: bool = True
     order_mode: Literal["manual", "guided"] = "manual"
     reuse_discovery: bool = False
@@ -127,6 +128,12 @@ async def startup():
 async def shutdown():
     app.state.worker.cancel()
     await asyncio.gather(app.state.worker, return_exceptions=True)
+
+@app.get("/preferences.js")
+async def preferences_script():
+    return FileResponse("/app/app/preferences.js", media_type="text/javascript",
+                        headers={"Cache-Control": "no-cache"})
+
 
 @app.get("/")
 async def index():
@@ -401,6 +408,7 @@ async def create_scan(spec: ScanRequest, request: Request):
                 and existing.get("modules") == spec.modules
                 and existing.get("options", {}).get("coverage_profile", "current") == spec.options.coverage_profile
                 and existing.get("options", {}).get("reuse_discovery", False) == spec.options.reuse_discovery
+                and existing.get("options", {}).get("zap_wait_seconds", config.ZAP_PASSIVE_WAIT_SECONDS_DEFAULT) == spec.options.zap_wait_seconds
                 and not (spec.options.inputs.source_text or spec.options.inputs.sbom_text or spec.options.inputs.llm_path
                          or spec.options.inputs.idor_path or spec.options.inputs.idor_values)
                 and existing.get("options", {}).get("inputs", {}).get("api_target", False) == spec.options.inputs.api_target):
@@ -644,7 +652,11 @@ async def run_scan_job(identifier, spec):
                                 z, zap_call, host,
                                 limit=config.ZAP_PASSIVE_POLL_LIMIT,
                                 interval=config.ZAP_PASSIVE_POLL_SECONDS,
-                                stall_checks=config.ZAP_PASSIVE_STALL_CHECKS)
+                                stall_checks=config.ZAP_PASSIVE_STALL_CHECKS,
+                                timeout_seconds=spec.options.zap_wait_seconds,
+                                on_progress=lambda state: log_event(
+                                    job, "passive_queue_wait", module=module,
+                                    summary="Waiting for ZAP passive rules to finish", diagnostics=state))
                             pending_records = queue_report["remaining"]
                             wait_checks = queue_report["checks"]
                             origin_url = urlsplit(url)._replace(path="/", query="", fragment="").geturl()
@@ -675,7 +687,7 @@ async def run_scan_job(identifier, spec):
                             })
                         job["alerts"].extend(captured)
                         result = {
-                            "status": "completed" if pending_records <= 0 else "partial",
+                            "status": "completed" if pending_records == 0 else "partial",
                             "reason": (queue_report["reason"] if pending_records else ""),
                             "pending_records": pending_records,
                             "queue_stalled": queue_report["stalled"],
@@ -685,6 +697,7 @@ async def run_scan_job(identifier, spec):
                             "alerts_collected": len(captured),
                             "queue_scope": "global",
                             "wait_checks": wait_checks,
+                            "passive_wait": {key: value for key, value in queue_report.items() if key != "reason"},
                         }
                     elif module == "nuclei":
                         selection = spec.options.nuclei
@@ -783,9 +796,10 @@ async def run_scan_job(identifier, spec):
                                "; alerts: " + str(len(result.get("alerts", []))) +
                                "; global queued passive records: " + str(result.get("pending_records", "unknown")) +
                                "; wait checks: " + str(result.get("wait_checks", 0)) +
+                               "; passive wait seconds: " + str(result.get("passive_wait", {}).get("elapsed_seconds", "unknown")) +
                                "; host tasks running: " + str(result.get("host_tasks_running", "unknown")) +
                                "; stalled: " + str(result.get("queue_stalled", "unknown")))
-                    if result.get("reason"):
+                    if result.get("reason") and not result.get("passive_wait"):
                         summary += "; " + str(result["reason"])
                 summary = summary[:1200]
                 counts = {
@@ -806,6 +820,8 @@ async def run_scan_job(identifier, spec):
                     diagnostics["coverage_budget" if module == "dalfox" else "coverage"] = result["coverage"]
                 if result.get("seed_count") is not None:
                     diagnostics["crawl_seeds"] = result["seed_count"]
+                if result.get("passive_wait") is not None:
+                    diagnostics["passive_wait"] = result["passive_wait"]
                 if result.get("verification") is not None:
                     diagnostics["verification"] = result["verification"]
                 diagnostics["coverage_profile"] = spec.options.coverage_profile

@@ -5,6 +5,22 @@ sdk: docker
 app_port: 7860
 ---
 
+## Passive ZAP completion and saved browser preferences
+
+ZAP passive rules run asynchronously after proxied responses arrive. The old 30 × 0.75-second polling window could stop after about 22.5 seconds while a large response was still being processed. The default passive wait budget is now **120 seconds**, adjustable from **15–300 seconds** in Settings → Pipeline & modules → Advanced discovery limits. API clients use `options.zap_wait_seconds`. A stable pending-record count with a task for the current host remains active work; zero pending records is still required for completion.
+
+The wait budget also bounds ZAP queue API calls. The shared ZAP slot remains held while waiting and collecting alerts. Periodic `passive_queue_wait` events and the final stage diagnostics record elapsed time, pending count, task counts and deadline state. Exhausted budgets or a stalled backlog retain collected alerts and report partial coverage. This does not guarantee every large response finishes within five minutes.
+
+Non-sensitive settings now save automatically in persistent, host-only preference cookies for one year: enabled modules, pipeline mode/order, coverage, concurrency, scanner limits (including passive wait), request settings, static view filters, bundled Nuclei choices and selected public community template paths. Blank report-count filters remain blank. The Settings page shows save/blocked-cookie status and offers **Restore default settings**, which clears only ASFB preference cookies.
+
+Credentials/account identities, targets/search text, source and SBOM text, custom YAML/drafts, target-specific module inputs, JWTs, policy/active-test confirmations and credential-verification authorization are excluded. Preferences are browser/origin scoped; HTTPS uses Secure, SameSite=None and Partitioned cookies to support compatible embedded HF browsers. If browser policy blocks storage, the page explains that settings apply only to the current page.
+
+### Extending preferences without resets
+
+`app/preferences.js` exposes a registry-based `PreferenceStore`. Use stable namespace/key pairs and register only non-sensitive, validated fields. Each `asfb_pref_<namespace>` cookie has a `{v, values}` envelope containing overrides. Additive fields inherit current defaults without a schema bump; newly added modules/templates receive their own defaults. Restored pipeline orders append newly introduced module names. Existing choices and unknown keys remain intact.
+
+For incompatible changes, supply a namespace schema version and sequential migration functions through the store's `schemas` option. A page with an older schema reads compatible values but will not overwrite a newer cookie. Validation rejects individual bad values without resetting other settings. Writes merge changed fields with the latest cookie, enforce a conservative per-cookie size budget, and report blocked/oversized storage without silently deleting prior data. Introduce separate namespaces for future large features. No cookies need to be cleared when adding a function.
+
 ## Optional TruffleHog verification
 
 In **Settings → Module inputs**, supply source text and select **Verify found credentials I own or am authorized to test**. Select TruffleHog in the pipeline as usual. Verification is off by default, is not enabled by Full pipeline, and resets after a successful scan submission. No separate provider API key is required: native detectors use detected credentials to check the relevant service from the HF worker.

@@ -33,6 +33,8 @@ jobs:
           Path("/tmp/asfb-inline.js").write_text(js)
           PY
           node --check /tmp/asfb-inline.js
+          node --check app/preferences.js
+          node tests/preferences_store_test.cjs
       - name: Verify dashboard in Chromium with mocked APIs
         env:
           ASFB_PLAYWRIGHT_MODULE: ${{ runner.temp }}/asfb-ui/node_modules/playwright

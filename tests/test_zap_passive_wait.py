@@ -47,3 +47,40 @@ def test_zap_global_pending_queue_is_not_misreported_as_missing_host_results():
         asyncio.run(run())
     assert job["status"]=="partial"
     assert "global passive queue" in job["stage_details"]["zap-passive"]["reason"]
+
+
+def test_zap_collects_late_alerts_after_passive_wait_and_records_progress():
+    from test_worker_pipeline import run_job
+    run, job = run_job(["zap-passive"])
+    finished = []
+    class Response:
+        status_code = 200
+    class Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return False
+        async def get(self, *args, **kwargs): return Response()
+    async def wait(client, call, host, **kwargs):
+        assert kwargs["timeout_seconds"] == 120 and kwargs["limit"] > 30
+        kwargs["on_progress"]({"remaining": 1, "checks": 40, "host_tasks_running": 1,
+                               "global_tasks_running": 1, "elapsed_seconds": 30,
+                               "deadline_seconds": 120, "deadline_reached": False})
+        finished.append(True)
+        return {"remaining": 0, "checks": 66, "stalled": False, "host_tasks_running": 0,
+                "global_tasks_running": 0, "elapsed_seconds": 49.5,
+                "deadline_seconds": 120, "deadline_reached": False, "reason": ""}
+    async def zap(client, component, action, params):
+        if action == "view/alerts":
+            assert finished
+            return {"alerts": [{"name": "Late passive alert", "risk": "Low",
+                               "confidence": "Low", "url": "https://example.com/large",
+                               "pluginId": "late"}]}
+        return {}
+    with patch.object(main, "public_host"), patch.object(main.httpx, "AsyncClient", return_value=Client()), \
+         patch.object(main, "zap_call", zap), patch("app.zap_control.wait_for_passive_queue", wait), \
+         patch.object(main.asyncio, "sleep", new_callable=AsyncMock):
+        asyncio.run(run())
+    assert job["status"] == "completed"
+    assert job["alerts"][0]["name"] == "Late passive alert"
+    assert any(event["event"] == "passive_queue_wait" for event in main.scan_events)
+    final = next(event for event in main.scan_events if event["event"] == "stage_finished")
+    assert final["diagnostics"]["passive_wait"]["checks"] == 66
