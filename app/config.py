@@ -37,8 +37,8 @@ ARJUN_TIMEOUT_SECONDS = 85
 DALFOX_TIMEOUT_SECONDS = 65
 
 # Wait briefly for ZAP to drain its asynchronous passive-scan queue before reading alerts.
-ZAP_PASSIVE_POLL_LIMIT = 12
-ZAP_PASSIVE_POLL_SECONDS = 0.5
+ZAP_PASSIVE_POLL_LIMIT = 30
+ZAP_PASSIVE_POLL_SECONDS = 0.75
 
 # One GAU archive source is selected at a time; change after validating availability.
 GAU_PROVIDER = "otx"
@@ -99,3 +99,6 @@ GAU_FALLBACK_BREAKER_COOLDOWN_SECONDS = 900
 
 # Maximum estimated HTTP requests for all selected Nuclei templates per job.
 NUCLEI_MAX_REQUEST_BUDGET = 60
+
+# Fetch multiple alert pages from ZAP's local API (no additional target traffic).
+ZAP_ALERT_FETCH_LIMIT = 500

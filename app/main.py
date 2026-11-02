@@ -511,27 +511,56 @@ async def run_scan_job(identifier, spec):
                                     job["error"] = "Target fetch failed: " + exc.__class__.__name__
                                     break
                                 await asyncio.sleep(spec.delay_seconds)
+                    # ZAP's passive scanner is asynchronous and its queue is global
+                    # to this process, not specific to the current host.
                     pending_records = 0
+                    wait_checks = 0
+                    zap_alerts = []
                     async with httpx.AsyncClient(timeout=20, trust_env=False) as z:
                         for _ in range(config.ZAP_PASSIVE_POLL_LIMIT):
                             queue_info = await zap_call(z, "pscan", "view/recordsToScan", {})
                             pending_records = int(queue_info.get("recordsToScan", 0))
+                            wait_checks += 1
                             if pending_records <= 0:
                                 break
                             await asyncio.sleep(config.ZAP_PASSIVE_POLL_SECONDS)
-                        info = await zap_call(z, "core", "view/alerts",
-                                              {"baseurl": url, "start": "0", "count": "100"})
-                    job["alerts"].extend([{
-                        "source": "zap", "name": a.get("name"), "risk": a.get("risk"),
-                        "confidence": a.get("confidence"), "url": a.get("url"),
-                        "description": (a.get("description") or "")[:1000]
-                    } for a in info.get("alerts", [])
-                      if urlsplit(a.get("url") or "").hostname == host])
+                        origin_url = urlsplit(url)._replace(path="/", query="", fragment="").geturl()
+                        for offset in range(0, config.ZAP_ALERT_FETCH_LIMIT, 100):
+                            page = await zap_call(z, "core", "view/alerts", {
+                                "baseurl": origin_url, "start": str(offset), "count": "100"})
+                            entries = page.get("alerts", [])
+                            if not isinstance(entries, list):
+                                break
+                            zap_alerts.extend(entries)
+                            if len(entries) < 100:
+                                break
+                    observed_keys = set()
+                    captured = []
+                    for a in zap_alerts:
+                        if not isinstance(a, dict) or urlsplit(a.get("url") or "").hostname != host:
+                            continue
+                        key = (a.get("pluginId") or a.get("name"), a.get("url"),
+                               a.get("param") or "")
+                        if key in observed_keys:
+                            continue
+                        observed_keys.add(key)
+                        captured.append({
+                            "source": "zap", "name": a.get("name"), "risk": a.get("risk"),
+                            "confidence": a.get("confidence"), "url": a.get("url"),
+                            "description": (a.get("description") or "")[:1000],
+                            "plugin_id": a.get("pluginId"), "parameter": a.get("param"),
+                        })
+                    job["alerts"].extend(captured)
                     result = {
                         "status": "completed" if pending_records <= 0 else "partial",
-                        "reason": (f"ZAP passive scan still has {pending_records} pending records"
+                        "reason": (f"ZAP global passive queue still has {pending_records} pending records "
+                                   f"after {wait_checks} checks; some passive alerts may arrive later."
                                    if pending_records else ""),
                         "pending_records": pending_records,
+                        "alerts": captured,
+                        "alerts_collected": len(captured),
+                        "queue_scope": "global",
+                        "wait_checks": wait_checks,
                     }
                 elif module == "nuclei":
                     selection = spec.options.nuclei
@@ -593,7 +622,8 @@ async def run_scan_job(identifier, spec):
             if module == "zap-passive":
                 summary = ("ZAP-proxied requests: " + str(job["request_count"]) +
                            "; alerts: " + str(len(job["alerts"])) +
-                           "; queued passive records: " + str(result["pending_records"]))
+                           "; global queued passive records: " + str(result["pending_records"]) +
+                           "; wait checks: " + str(result["wait_checks"]))
             summary = summary[:1200]
             counts = {
                 "new_endpoints": len(result.get("endpoints", [])),
