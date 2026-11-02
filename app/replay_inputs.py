@@ -135,7 +135,7 @@ class StateCounter(PrivateModel):
     field: str = Field(min_length=1, max_length=50)
     pointer: str = Field(min_length=1, max_length=200)
     _field = field_validator("field")(key)
-    _pointer = field_validator("pointer")(pointer)
+    _pointer = field_validator("pointer")(json_pointer)
 
     @model_validator(mode="after")
     def read_only(self):
