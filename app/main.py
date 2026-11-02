@@ -626,12 +626,16 @@ async def run_scan_job(identifier, spec):
                 summary = (str(len(result.get("findings", []))) +
                            " unverified Dalfox findings; " + summary)
             if module == "zap-passive":
+                # A failed ZAP API call has no queue report. Formatting its
+                # diagnostics must not raise and abort the remaining modules.
                 summary = ("ZAP-proxied requests: " + str(job["request_count"]) +
-                           "; alerts: " + str(len(job["alerts"])) +
-                           "; global queued passive records: " + str(result["pending_records"]) +
-                           "; wait checks: " + str(result["wait_checks"]) +
-                           "; host tasks running: " + str(result["host_tasks_running"]) +
-                           "; stalled: " + str(result["queue_stalled"]))
+                           "; alerts: " + str(len(result.get("alerts", []))) +
+                           "; global queued passive records: " + str(result.get("pending_records", "unknown")) +
+                           "; wait checks: " + str(result.get("wait_checks", 0)) +
+                           "; host tasks running: " + str(result.get("host_tasks_running", "unknown")) +
+                           "; stalled: " + str(result.get("queue_stalled", "unknown")))
+                if result.get("reason"):
+                    summary += "; " + str(result["reason"])
             summary = summary[:1200]
             counts = {
                 "new_endpoints": len(result.get("endpoints", [])),

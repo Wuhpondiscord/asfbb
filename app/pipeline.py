@@ -16,27 +16,37 @@ async def execute(args, timeout):
         p = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     except FileNotFoundError:
         return ["Binary missing"], "unavailable"
-    try:
-        out, err = await asyncio.wait_for(p.communicate(), timeout)
-    except asyncio.CancelledError:
-        # Cancelling a scan must terminate its tool process, not only its Python task.
+    # communicate() owns the pipe readers. Cancelling it at the deadline and
+    # calling it again loses bytes already consumed by those readers.
+    communication = asyncio.create_task(p.communicate())
+    timed_out = False
+
+    def stop_process():
         if p.returncode is None:
             try:
                 p.kill()
             except ProcessLookupError:
+                # The process may exit between the returncode check and kill.
                 pass
-        await p.communicate()
+
+    try:
+        out, err = await asyncio.wait_for(asyncio.shield(communication), timeout)
+    except asyncio.CancelledError:
+        # Keep the same pipe readers alive while terminating the tool.
+        stop_process()
+        await communication
         raise
     except asyncio.TimeoutError:
-        p.kill()
-        out, err = await p.communicate()
-        lines = clean_output(out).splitlines()[:config.PROCESS_OUTPUT_MAX_LINES]
+        timed_out = True
+        stop_process()
+        out, err = await communication
+    lines = clean_output(out).splitlines()[:config.PROCESS_OUTPUT_MAX_LINES]
+    if timed_out or p.returncode:
         lines += ["[stderr] " + line[:200] for line in clean_output(err).splitlines()[-8:]]
+    if timed_out:
         lines.append("[diagnostic] Deadline exceeded after " + str(timeout) + " seconds; partial output retained")
         return lines, "timeout"
-    lines = clean_output(out).splitlines()[:500]
     if p.returncode:
-        lines += ["[stderr] " + x[:200] for x in clean_output(err).splitlines()[-8:]]
         lines.append("[diagnostic] Process exit code: " + str(p.returncode))
     return lines, "completed" if p.returncode == 0 else "failed"
 
