@@ -4,9 +4,9 @@ from urllib.parse import urlsplit
 MODULES = ("gau", "katana", "httpx", "wafw00f", "zap-passive", "nuclei", "nikto", "wpscan",
            "testssl", "wapiti", "retirejs", "amass", "kiterunner", "nettacker",
            "idor-forge", "trufflehog", "semgrep", "depscan", "trivy", "osv-scanner", "garak",
-           "ffuf", "arjun", "dalfox", "sqlmap")
+           "ffuf", "arjun", "dalfox", "sqlmap", "graphw00f", "corsy", "takeover", "s3-review", "websocket", "vcs-artifacts")
 URL_PRODUCERS = ("gau", "katana", "ffuf", "kiterunner")
-URL_CONSUMERS = ("httpx", "zap-passive", "nuclei", "retirejs", "arjun", "dalfox", "sqlmap")
+URL_CONSUMERS = ("httpx", "zap-passive", "nuclei", "retirejs", "arjun", "dalfox", "sqlmap", "graphw00f", "websocket")
 STATIC_EXTENSIONS = (".js", ".mjs", ".css", ".json", ".map", ".svg", ".png", ".jpg",
                      ".jpeg", ".gif", ".ico", ".pdf", ".woff", ".woff2", ".webmanifest")
 
@@ -35,14 +35,14 @@ def plan(modules, mode="manual", reuse=False):
                   ("httpx", "nuclei")})
     edges.update({("wafw00f", c) for c in ("ffuf", "nuclei", "nikto", "wpscan", "wapiti", "arjun", "dalfox", "sqlmap")})
     if reuse:
-        edges.update({("httpx", c) for c in ("nikto", "wpscan", "wapiti")})
+        edges.update({("httpx", c) for c in ("nikto", "wpscan", "wapiti", "corsy")})
     edges = {(p, c) for p, c in edges if p in requested and c in requested and p != c}
     ordered, remaining = [], requested.copy()
     if mode == "guided":
         while remaining:
             ready_nodes = [m for m in remaining if not any(c == m and p in remaining for p, c in edges)]
             def phase(m):
-                return 0 if m in URL_PRODUCERS or m == "amass" else 1 if m == "httpx" else 2 if m == "arjun" else 3
+                return 0 if m in URL_PRODUCERS or m in ("amass", "takeover") else 1 if m == "httpx" else 2 if m == "arjun" else 3
             ready = min(ready_nodes, key=lambda m: (phase(m), requested.index(m)), default=None)
             if ready is None:
                 raise ValueError("Pipeline dependencies contain a cycle")

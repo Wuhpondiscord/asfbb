@@ -91,7 +91,7 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
  await page.locator('#modIdorForge').check();
  await page.locator('#moduleSearch').fill('');
  await page.locator('button[onclick="enableFullPipeline()"]').click();
- assert.equal(await page.locator('.module-card input:checked').count(),25);
+ assert.equal(await page.locator('.module-card input:checked').count(),31);
  assert.equal(await page.locator('#pipelineMode').inputValue(),'guided');
  assert.equal(await page.locator('#coverageProfile').inputValue(),'balanced');
  await page.locator('#pipelineMode').selectOption('manual');
@@ -190,6 +190,9 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
  await page.locator('#settingsOrder').fill(customOrder);
  await page.locator('[data-settings="inputs"]').click();
  await page.locator('#moduleSastLanguage').selectOption('typescript');
+ await page.locator('#moduleGraphqlPath').fill('/fixture-private-graphql');
+ await page.locator('#moduleCorsPath').fill('/fixture-private-cors');
+ await page.locator('#moduleWebsocketPath').fill('/fixture-private-ws');
  await page.locator('#moduleSource').fill('fixture-private-source');
  await page.locator('#moduleSbom').fill('fixture-private-sbom');
  await page.locator('#moduleTrufflehogVerify').check();
@@ -225,14 +228,14 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
  assert.equal(await page.locator('#reports').inputValue(),'');
  assert(!(await page.locator('#nucleiBuiltins input').first().isChecked()));
  assert(await page.evaluate(()=>nucleiCommunityPaths.has('http/exposures/configs/example.yaml')));
- for(const id of ['moduleSource','moduleSbom','moduleIdorValues','acookie','jwt','nucleiCustom'])
+ for(const id of ['moduleGraphqlPath','moduleCorsPath','moduleWebsocketPath','moduleSource','moduleSbom','moduleIdorValues','acookie','jwt','nucleiCustom'])
   assert.equal(await page.locator('#'+id).inputValue(),'');
  for(const id of ['policy','activeConsent','moduleTrufflehogVerify'])
   assert(!(await page.locator('#'+id).isChecked()));
  // A new release adds a setting and builtin: existing saved choices survive.
  html=html.replace('id="settingsHttpx" type="number" value="10"','id="settingsHttpx" type="number" value="12"');
- html=html.replace('const names={"wafw00f":','const names={"future":"modFuture","wafw00f":')
-  .replaceAll('gau, katana, httpx, wafw00f','gau, katana, httpx, future, wafw00f')
+ html=html.replace('const names={"vcs-artifacts":','const names={"future":"modFuture","vcs-artifacts":')
+  .replaceAll('gau, katana, takeover, httpx, wafw00f','gau, katana, takeover, httpx, future, wafw00f')
   .replace('<p id="moduleSearchEmpty"','<label class="module-card" data-module-search="future"><input id="modFuture" type="checkbox"/><span>Future module</span></label><p id="moduleSearchEmpty"');
  builtinInfo={templates:[{id:'technology-headers'},{id:'future-default'}],default_ids:['technology-headers','future-default']};
  await page.reload();

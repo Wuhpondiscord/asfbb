@@ -40,6 +40,11 @@ FROM python:3.12-slim-bookworm AS analysis-tools
 RUN python -m venv --copies /opt/wafw00f && /opt/wafw00f/bin/pip install --no-cache-dir wafw00f==2.4.2
 RUN python -m venv --copies /opt/semgrep && /opt/semgrep/bin/pip install --no-cache-dir semgrep==1.183.0
 
+FROM python:3.12-slim-bookworm AS protocol-tools
+RUN python -m venv --copies /opt/protocol && /opt/protocol/bin/pip install --no-cache-dir requests==2.32.5 dnspython==2.8.0
+# Native engines/data and their licenses are fetched only during the remote build.
+RUN python -c 'from pathlib import Path; from urllib.request import urlopen; files=[["https://raw.githubusercontent.com/dolevf/graphw00f/4901f824140a2da168876412593c213afbdd75fb/graphw00f/lib.py","/opt/graphw00f/graphw00f/lib.py"],["https://raw.githubusercontent.com/dolevf/graphw00f/4901f824140a2da168876412593c213afbdd75fb/graphw00f/helpers.py","/opt/graphw00f/graphw00f/helpers.py"],["https://raw.githubusercontent.com/dolevf/graphw00f/4901f824140a2da168876412593c213afbdd75fb/version.py","/opt/graphw00f/version.py"],["https://raw.githubusercontent.com/dolevf/graphw00f/4901f824140a2da168876412593c213afbdd75fb/LICENSE","/opt/graphw00f/LICENSE"],["https://raw.githubusercontent.com/s0md3v/Corsy/2985ae24da524ba6905d36bfbadca7fe71a9f199/core/__init__.py","/opt/corsy/core/__init__.py"],["https://raw.githubusercontent.com/s0md3v/Corsy/2985ae24da524ba6905d36bfbadca7fe71a9f199/core/tests.py","/opt/corsy/core/tests.py"],["https://raw.githubusercontent.com/s0md3v/Corsy/2985ae24da524ba6905d36bfbadca7fe71a9f199/core/requester.py","/opt/corsy/core/requester.py"],["https://raw.githubusercontent.com/s0md3v/Corsy/2985ae24da524ba6905d36bfbadca7fe71a9f199/core/utils.py","/opt/corsy/core/utils.py"],["https://raw.githubusercontent.com/s0md3v/Corsy/2985ae24da524ba6905d36bfbadca7fe71a9f199/core/colors.py","/opt/corsy/core/colors.py"],["https://raw.githubusercontent.com/s0md3v/Corsy/2985ae24da524ba6905d36bfbadca7fe71a9f199/db/details.json","/opt/corsy/db/details.json"],["https://raw.githubusercontent.com/s0md3v/Corsy/2985ae24da524ba6905d36bfbadca7fe71a9f199/LICENSE","/opt/corsy/LICENSE"],["https://raw.githubusercontent.com/EdOverflow/can-i-take-over-xyz/5bd4e12837911c8475486f1da922c9b9c706e632/fingerprints.json","/opt/takeover/fingerprints.json"],["https://raw.githubusercontent.com/EdOverflow/can-i-take-over-xyz/5bd4e12837911c8475486f1da922c9b9c706e632/LICENSE","/opt/takeover/LICENSE"]]; [(Path(dst).parent.mkdir(parents=True,exist_ok=True),Path(dst).write_bytes(urlopen(url,timeout=30).read())) for url,dst in files]'
+
 FROM python:3.12-slim-bookworm AS idor-tools
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
 # Pin the upstream core and retain its MIT license. No GUI or upstream CLI.
@@ -48,6 +53,10 @@ RUN python -m venv --copies /opt/idor-forge-venv && /opt/idor-forge-venv/bin/pip
 
 FROM zaproxy/zap-stable
 USER root
+COPY --from=protocol-tools /opt/protocol /opt/protocol
+COPY --from=protocol-tools /opt/graphw00f /opt/graphw00f
+COPY --from=protocol-tools /opt/corsy /opt/corsy
+COPY --from=protocol-tools /opt/takeover /opt/takeover
 COPY --from=analysis-tools /opt/wafw00f /opt/wafw00f
 COPY --from=analysis-tools /opt/semgrep /opt/semgrep
 COPY --from=wp-tools /usr/local/ /usr/local/

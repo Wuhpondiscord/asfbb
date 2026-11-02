@@ -11,7 +11,7 @@ from fastapi import FastAPI, File, Header, HTTPException, UploadFile, Depends, R
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from .scope import LEVELS, parse_csv, public_host, target_url
+from .scope import LEVELS, parse_csv, public_host, target_url, DNSResolutionFailed
 from . import storage
 from .jwtcheck import inspect_jwt
 from .pipeline import katana, nuclei, gau, probe, in_host
@@ -140,7 +140,7 @@ async def index():
     return FileResponse("/app/app/index.html")
 
 class PipelinePlanRequest(BaseModel):
-    modules: list[str] = Field(min_length=1, max_length=30)
+    modules: list[str] = Field(min_length=1, max_length=64)
     order_mode: Literal["manual", "guided"] = "manual"
     reuse_discovery: bool = False
     coverage_profile: Literal["current", "quick", "balanced", "thorough"] = "current"
@@ -366,6 +366,16 @@ def remove_account(account_id: str, request: Request):
     accounts.pop(account_id, None)
     return {"removed": True}
 
+def validate_scan_host(host, modules):
+    try:
+        public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
+    except DNSResolutionFailed:
+        # Only the DNS evidence profile may run without an address. Every
+        # eventual HTTP request still performs its own public-host validation.
+        if "takeover" not in modules:
+            raise
+
+
 @app.post("/api/scans", dependencies=[Depends(authorize)])
 async def create_scan(spec: ScanRequest, request: Request):
     if not spec.modules or len(spec.modules) != len(set(spec.modules)) or not set(spec.modules).issubset(({"zap-passive","katana","nuclei","gau","httpx"} | ACTIVE_MODULES)):
@@ -394,7 +404,7 @@ async def create_scan(spec: ScanRequest, request: Request):
         raise HTTPException(409, "Selected asset is no longer available in this session. Refresh assets or re-import the scope CSV.")
     try:
         url, host = target_url(item)
-        public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
+        validate_scan_host(host, spec.modules)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     if spec.account_id:
@@ -410,7 +420,8 @@ async def create_scan(spec: ScanRequest, request: Request):
                 and existing.get("options", {}).get("reuse_discovery", False) == spec.options.reuse_discovery
                 and existing.get("options", {}).get("zap_wait_seconds", config.ZAP_PASSIVE_WAIT_SECONDS_DEFAULT) == spec.options.zap_wait_seconds
                 and not (spec.options.inputs.source_text or spec.options.inputs.sbom_text or spec.options.inputs.llm_path
-                         or spec.options.inputs.idor_path or spec.options.inputs.idor_values)
+                         or spec.options.inputs.idor_path or spec.options.inputs.idor_values
+                         or spec.options.inputs.graphql_path or spec.options.inputs.cors_path or spec.options.inputs.websocket_path)
                 and existing.get("options", {}).get("inputs", {}).get("api_target", False) == spec.options.inputs.api_target):
             return {"id": existing["id"], "status": existing["status"], "reused": True}
     identifier = uuid.uuid4().hex
@@ -455,7 +466,7 @@ async def batch_scans(payload: BatchRequest, request: Request):
             raise HTTPException(409, "Selected scope is stale or belongs to another session. Refresh assets, re-import the CSV if necessary, and select targets again.")
         try:
             _, host = target_url(item)
-            public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
+            validate_scan_host(host, payload.modules)
         except ValueError as exc:
             raise HTTPException(422, str(exc))
     result = []
@@ -579,14 +590,22 @@ async def run_scan_job(identifier, spec):
                 break
             async with module_slot(module, job, log_event,
                                    enabled=module not in ('depscan', 'trivy') or bool(spec.options.inputs.sbom_text)):
-                public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
+                unresolved = False
+                try:
+                    public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
+                except DNSResolutionFailed:
+                    if "takeover" not in spec.modules:
+                        raise
+                    unresolved = True
                 job["stage"] = module
                 started_at = time.monotonic()
                 log_event(job, "stage_started", module=module, position=position + 1, total=len(spec.modules), endpoints=len(endpoints))
                 job["progress"] = round(position * 100 / len(spec.modules))
                 job["pipeline"][module] = "running"
                 try:
-                    if module == "gau":
+                    if unresolved and module != "takeover":
+                        result = {"status": "skipped", "reason": "Target DNS unresolved; only DNS takeover evidence is applicable", "alerts": []}
+                    elif module == "gau":
                         result = await gau(url, host, spec.options.endpoint_limit, spec.options.gau_mode)
                         for discovered in result["endpoints"]:
                             endpoint_sources.setdefault(discovered, []).append("gau")
@@ -712,7 +731,7 @@ async def run_scan_job(identifier, spec):
                         job["alerts"].extend(result["alerts"])
                     elif module in WEB_MODULES:
                         module_url = (page_target(url, job.get("probes", [])) if
-                                      spec.options.reuse_discovery and module in ("nikto", "wpscan", "wapiti", "retirejs")
+                                      spec.options.reuse_discovery and module in ("nikto", "wpscan", "wapiti", "retirejs", "corsy")
                                       else url)
                         if module_url != url:
                             log_event(job, "data_handoff", module=module, data="Observed live page",
@@ -824,6 +843,8 @@ async def run_scan_job(identifier, spec):
                     diagnostics["crawl_seeds"] = result["seed_count"]
                 if job.get("waf", {}).get("vendors"):
                     diagnostics["waf_context"] = job["waf"]["vendors"]
+                if module in ("graphw00f", "corsy", "takeover", "s3-review", "websocket", "vcs-artifacts") and result.get("metadata") is not None:
+                    diagnostics["protocol_review"] = result["metadata"]
                 if result.get("passive_wait") is not None:
                     diagnostics["passive_wait"] = result["passive_wait"]
                 if result.get("verification") is not None:

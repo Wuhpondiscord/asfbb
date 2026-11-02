@@ -112,15 +112,19 @@ def target_url(asset):
     return parts._replace(netloc=authority, fragment="").geturl(), host
 
 
+class DNSResolutionFailed(ValueError):
+    """Unresolved DNS is distinct from a private/reserved destination."""
+
+
 def public_host(host, allow_private=False):
     if not re.fullmatch(r"[a-z0-9.-]+", host):
         raise ValueError("Invalid hostname")
     try:
         addresses = {x[4][0] for x in socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)}
     except socket.gaierror as exc:
-        raise ValueError("DNS resolution failed") from exc
+        raise DNSResolutionFailed("DNS resolution failed") from exc
     if not addresses:
-        raise ValueError("No DNS results")
+        raise DNSResolutionFailed("No DNS results")
     if not allow_private:
         for address in addresses:
             ip = ipaddress.ip_address(address)

@@ -16,7 +16,7 @@ from .scope import public_host
 
 from .final_module_names import FINAL_MODULES
 
-MODULES = {"nikto", "wpscan", "testssl", "wapiti", "retirejs", "idor-forge", "wafw00f", "semgrep"} | FINAL_MODULES
+MODULES = {"nikto", "wpscan", "testssl", "wapiti", "retirejs", "idor-forge", "wafw00f", "semgrep", "graphw00f", "corsy", "takeover", "s3-review", "websocket", "vcs-artifacts"} | FINAL_MODULES
 
 
 def same_origin(candidate, target):
@@ -187,6 +187,9 @@ def command(module, target, host, agent, report, delay):
 async def run_web_module(module, url, host, agent, delay=1.5, discovered=None, inputs=None, profile="current"):
     if module not in MODULES or not in_host(url, host):
         raise ValueError("Invalid module or out-of-scope web target")
+    if module in ("graphw00f", "corsy", "takeover", "s3-review", "websocket", "vcs-artifacts"):
+        from .protocol_modules import run
+        return await run(module, url, host, agent, delay, discovered, inputs)
     if module in ("wafw00f", "semgrep"):
         from .analysis_modules import run
         return await run(module, url, host, agent, delay, inputs)

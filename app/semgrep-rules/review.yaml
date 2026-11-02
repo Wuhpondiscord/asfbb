@@ -135,6 +135,16 @@
           "pattern-not": "$ELEMENT.innerHTML = \"...\""
         }
       ]
+    },
+    {
+      "id": "asfb-js-postmessage-wildcard",
+      "languages": [
+        "javascript",
+        "typescript"
+      ],
+      "message": "Review wildcard postMessage target origin and message sensitivity.",
+      "severity": "WARNING",
+      "pattern": "$WINDOW.postMessage($DATA, \"*\")"
     }
   ]
 }

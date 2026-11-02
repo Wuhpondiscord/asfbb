@@ -44,6 +44,9 @@ class ModuleInputs(BaseModel):
     trufflehog_verify: bool = False
     sbom_text: str = Field(default="", max_length=1000000)
     api_target: bool = False
+    graphql_path: str = Field(default="", max_length=250)
+    cors_path: str = Field(default="", max_length=250)
+    websocket_path: str = Field(default="", max_length=250)
     idor_path: str = Field(default="", max_length=250)
     idor_parameter: str = Field(default="id", max_length=50)
     idor_baseline: str = Field(default="", max_length=100)
@@ -57,7 +60,7 @@ class ModuleInputs(BaseModel):
     def validate_sbom(cls, text):
         return clean_sbom(text)
 
-    @field_validator("llm_path", "idor_path")
+    @field_validator("llm_path", "idor_path", "graphql_path", "cors_path", "websocket_path")
     @classmethod
     def validate_llm_path(cls, path):
         if not path:
@@ -93,7 +96,8 @@ class ModuleInputs(BaseModel):
         return values
 
     def public_summary(self):
-        return {"sast_language": self.sast_language,
+        return {"graphql_configured": bool(self.graphql_path), "cors_configured": bool(self.cors_path),
+                "websocket_configured": bool(self.websocket_path), "sast_language": self.sast_language,
                 "trufflehog_verify": self.trufflehog_verify,
                 "source_bytes": len(self.source_text.encode("utf-8")),
                 "sbom_components": len(json.loads(self.sbom_text)["components"]) if self.sbom_text else 0,

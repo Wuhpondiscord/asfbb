@@ -8,6 +8,7 @@ from .pipeline import execute
 from .web_modules import alert, read_report
 
 SAST_RULES = {
+    "asfb-js-postmessage-wildcard": "Review wildcard postMessage target origin and message sensitivity.",
     "asfb-python-shell-true": "Review subprocess execution with shell=True.",
     "asfb-python-dynamic-code": "Review dynamically evaluated code and input provenance.",
     "asfb-python-pickle": "Deserialization must only accept trusted input.",
@@ -62,7 +63,7 @@ async def run(module, url, host, agent, delay, inputs=None):
                     "--jobs", "1", "--timeout", "5", "--max-memory", "512",
                     "--max-target-bytes", "1000000", str(source)]
             deadline = 75
-            reason = "Supplied source only; nine bundled pattern-review rules; CE single-file analysis; no code execution, remote registry, uploads or autofix"
+            reason = "Supplied source only; ten bundled pattern-review rules; CE single-file analysis; no code execution, remote registry, uploads or autofix"
         elif module == "wafw00f":
             spec = root / "spec.json"
             spec.write_text(json.dumps({"target": url, "host": host, "agent": agent, "delay": delay}), encoding="utf-8")

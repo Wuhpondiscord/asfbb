@@ -37,6 +37,7 @@ elif mode == "semgrep":
     for language, source, rule in [
         ("python", "import subprocess\nsubprocess.run('fixture', shell=True)\n", "asfb-python-shell-true"),
         ("javascript", "eval(userInput);\n", "asfb-js-eval"),
+        ("javascript", "window.parent.postMessage(data, \"*\");\n", "asfb-js-postmessage-wildcard"),
         ("typescript", "const value: string = input; eval(value);\n", "asfb-js-eval"),
     ]:
         result = asyncio.run(run("semgrep", "https://example.org/", "example.org", "Test", 1,
