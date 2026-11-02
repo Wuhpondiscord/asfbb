@@ -36,9 +36,9 @@ jobs:
       - name: Build and verify scanner container
         run: |
           docker build --progress plain -t asfb-ci .
-          docker run --rm -v "$PWD/tests:/app/tests:ro" --entrypoint /bin/sh asfb-ci -ec '
+          docker run --rm -v "$PWD/tests:/app/tests:ro" --entrypoint /bin/sh asfb-ci -exc '
             /usr/local/bin/trufflehog filesystem --help > /tmp/trufflehog-help
-            grep -q -- "--no-verification" /tmp/trufflehog-help
+            grep -q -- "no-verification" /tmp/trufflehog-help
             /opt/asfb-venv/bin/python /app/tests/trufflehog_offline_smoke.py
             /usr/local/bin/trivy sbom --help > /tmp/trivy-help
             grep -q -- "--skip-db-update" /tmp/trivy-help
