@@ -220,7 +220,8 @@ async def gau(url, host, limit=None, mode=None):
         args = ["/usr/local/bin/gau", "--threads", "1",
                 "--timeout", str(min(config.GAU_HTTP_TIMEOUT_SECONDS, deadline)),
                 "--retries", "0", "--providers", provider, host]
-        began = time.monotonic()\n        rows, status = await execute(args, deadline)
+        began = time.monotonic()
+        rows, status = await execute(args, deadline)
         urls = [value.strip() for value in rows
                 if isinstance(value, str) and in_host(value.strip(), host)]
         collected.extend(urls)

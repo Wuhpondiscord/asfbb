@@ -3,7 +3,8 @@ import os
 import secrets
 import time
 import uuid
-from threading import Lock\nfrom typing import Literal
+from threading import Lock
+from typing import Literal
 from urllib.parse import urlsplit
 
 import httpx
