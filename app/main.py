@@ -70,6 +70,7 @@ class NucleiSettings(BaseModel):
 
 class PipelineOptions(BaseModel):
     nuclei: NucleiSettings = Field(default_factory=NucleiSettings)
+    gau_mode: Literal["balanced", "expanded"] = config.GAU_MODE_DEFAULT
     endpoint_limit: int = Field(default=config.ENDPOINT_LIMIT_DEFAULT, ge=1, le=config.ENDPOINT_LIMIT_MAX)
     httpx_limit: int = Field(default=config.HTTPX_LIMIT_DEFAULT, ge=1, le=config.HTTPX_LIMIT_MAX)
     katana_depth: int = Field(default=config.KATANA_DEPTH_DEFAULT, ge=1, le=config.KATANA_DEPTH_MAX)
