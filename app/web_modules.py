@@ -21,8 +21,8 @@ def same_origin(candidate, target):
     try:
         a, b = urlsplit(candidate), urlsplit(target)
         return (in_host(candidate, b.hostname) and a.scheme == b.scheme and
-                (a.port or (443 if a.scheme == "https" else 80)) ==
-                (b.port or (443 if b.scheme == "https" else 80)))
+                (a.port if a.port is not None else (443 if a.scheme == "https" else 80)) ==
+                (b.port if b.port is not None else (443 if b.scheme == "https" else 80)))
     except (TypeError, ValueError):
         return False
 
