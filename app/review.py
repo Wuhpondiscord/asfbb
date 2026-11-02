@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 import re
 from collections import Counter
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from .pipeline import execute, in_host
 from . import config
 
@@ -21,8 +21,15 @@ def command(module, url, host):
         return ["/opt/asfb-venv/bin/arjun", "-u", url, "-t", "1",
                 "-T", str(config.ARJUN_HTTP_TIMEOUT_SECONDS), "-w", config.ARJUN_WORDLIST, "-c", str(config.ARJUN_CHUNK_SIZE), "--rate-limit", str(config.ARJUN_RATE_LIMIT)]
     if module == "dalfox":
+        # Dalfox's --timeout limits a request, not an entire stage. The scan
+        # stage also gets an internal deadline; external process timeout remains
+        # authoritative for discovery/preflight or network stalls.
         return ["/usr/local/bin/dalfox", "scan", url, "--workers", str(config.DALFOX_WORKERS),
-                "--timeout", str(config.DALFOX_HTTP_TIMEOUT_SECONDS), "--no-color", "--silence", "-f", "json"]
+                "--timeout", str(config.DALFOX_HTTP_TIMEOUT_SECONDS),
+                "--scan-timeout", str(config.DALFOX_SCAN_TIMEOUT_SECONDS),
+                "--max-payloads-per-param", str(config.DALFOX_PAYLOADS_PER_PARAM),
+                "--rate-limit", str(config.DALFOX_RATE_LIMIT),
+                "--skip-mining", "--skip-waf-probe", "--no-color", "--silence", "-f", "json"]
     if module == "sqlmap":
         if not urlsplit(url).query:
             raise ValueError("SQLmap review requires a parameterized URL")
@@ -109,6 +116,34 @@ def choose_arjun_target(primary, discovered, host):
     return best if score(best) > score(primary) else primary
 
 
+def choose_dalfox_target(primary, parameters, host):
+    """Use one same-host GET parameter from Arjun; retain the original query.
+
+    Avoid inventing parameters: a bare URL remains eligible for AST-only review
+    while Dalfox's expensive automatic parameter mining stays disabled.
+    """
+    candidates = []
+    for item in parameters or []:
+        if not isinstance(item, dict) or str(item.get("method", "GET")).upper() != "GET":
+            continue
+        candidate = item.get("url")
+        name = item.get("name")
+        if (not isinstance(candidate, str) or not in_host(candidate, host) or
+            not isinstance(name, str) or
+            not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.$-]{0,79}", name)):
+            continue
+        parts = urlsplit(candidate)
+        params = parse_qsl(parts.query, keep_blank_values=True)
+        if any(k == name for k, _ in params):
+            selected = candidate
+        else:
+            params.append((name, "asfb-review"))
+            selected = urlunsplit(parts._replace(query=urlencode(params)))
+        if in_host(selected, host):
+            candidates.append(selected)
+    return candidates[0] if candidates else primary
+
+
 def read_dalfox_report(path, host, default_url):
     """Parse Dalfox v3 JSON output and discard out-of-scope finding URLs."""
     try:
@@ -186,6 +221,10 @@ async def review(module, url, host):
         output = summarize_review(module, displayed_lines)
     if module == "dalfox" and dalfox_meta.get("incomplete"):
         reason = ("Dalfox reports incomplete results; " + reason).strip()[:500]
+    if module == "dalfox" and status == "completed" and not urlsplit(url).query:
+        # This is a deliberate coverage tradeoff: DOM AST runs, dictionary
+        # mining doesn't. Don't imply an exhaustive reflected-XSS assessment.
+        reason = "Bounded DOM/URL review; no query parameters supplied. Dictionary mining is disabled."
     return {"source": module, "status": status, "target": url,
             "exit_code": exit_code,
             "metadata": dalfox_meta,

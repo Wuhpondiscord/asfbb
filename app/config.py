@@ -107,3 +107,9 @@ NUCLEI_MAX_REQUEST_BUDGET = 60
 
 # Fetch multiple alert pages from ZAP's local API (no additional target traffic).
 ZAP_ALERT_FETCH_LIMIT = 500
+
+# Dalfox v3.2.4: avoid large automatic parameter mining after Arjun has run.
+# The process-wide timeout still covers phases outside Dalfox --scan-timeout.
+DALFOX_SCAN_TIMEOUT_SECONDS = 30
+DALFOX_PAYLOADS_PER_PARAM = 30
+DALFOX_RATE_LIMIT = 2

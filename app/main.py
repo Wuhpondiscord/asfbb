@@ -16,7 +16,7 @@ from .scope import LEVELS, parse_csv, public_host, target_url
 from . import storage
 from .jwtcheck import inspect_jwt
 from .pipeline import katana, nuclei, gau, probe, in_host
-from .review import ACTIVE_MODULES, review, choose_arjun_target
+from .review import ACTIVE_MODULES, review, choose_arjun_target, choose_dalfox_target
 from . import config
 from . import nuclei_catalog
 
@@ -576,7 +576,9 @@ async def run_scan_job(identifier, spec):
                     job["alerts"].extend(result["alerts"])
                 elif module in ACTIVE_MODULES:
                     review_url = (choose_arjun_target(url, endpoints, host)
-                                  if module == "arjun" else url)
+                                  if module == "arjun" else
+                                  choose_dalfox_target(url, job.get("parameters", []), host)
+                                  if module == "dalfox" else url)
                     result = await review(module, review_url, host)
                     job["reviews"].append(result)
                     if module == "dalfox":
