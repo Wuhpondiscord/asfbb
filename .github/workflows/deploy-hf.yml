@@ -22,7 +22,7 @@ jobs:
           ZAP_API_KEY: test-key
         run: python3 -m pytest -q tests/
       - name: Validate Python backend syntax
-        run: python3 -m py_compile app/idor_module.py app/idor_runner.py app/main.py app/pipeline.py app/web_modules.py app/client_modules.py app/wapiti_guard.py app/wapiti_runner.py app/config.py app/module_inputs.py app/final_modules.py app/final_module_names.py app/nettacker_runner.py app/garak_runner.py app/template_builder.py app/review.py app/zap_control.py app/scope.py app/jwtcheck.py app/storage.py
+        run: python3 -m py_compile app/concurrency.py app/idor_module.py app/idor_runner.py app/main.py app/pipeline.py app/web_modules.py app/client_modules.py app/wapiti_guard.py app/wapiti_runner.py app/config.py app/module_inputs.py app/final_modules.py app/final_module_names.py app/nettacker_runner.py app/garak_runner.py app/template_builder.py app/review.py app/zap_control.py app/scope.py app/jwtcheck.py app/storage.py
       - name: Validate dashboard JavaScript syntax
         run: |
           python3 - <<'PY'

@@ -5,6 +5,9 @@ the settings page exposes normal per-job overrides within these maxima.
 """
 ACTIVE_BATCH_LIMIT = 100
 QUEUE_CAPACITY = 1000
+# Optional concurrent targets; keep HF CPU/memory and external tools bounded.
+PARALLEL_JOBS_DEFAULT = 1
+PARALLEL_JOBS_MAX = 3
 ENDPOINT_LIMIT_DEFAULT = 100
 ENDPOINT_LIMIT_MAX = 2000
 HTTPX_LIMIT_DEFAULT = 10

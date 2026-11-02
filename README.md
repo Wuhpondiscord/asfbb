@@ -7,9 +7,13 @@ app_port: 7860
 
 ## Current remote workflow and dashboard
 
+The queue defaults to one running target per browser session. Select 2 or 3 concurrent targets under Scope & scanning or Settings → Pipeline & modules for new jobs. The Space has a global cap of three jobs; existing jobs keep their queued limit. Jobs from the same session respect the smallest limit among active jobs. Distinct hostnames can overlap, while endpoints on the same hostname are serialized across sessions so per-host module request rates are not multiplied. Each target’s modules remain ordered so discovery results are available to later stages.
+
+Concurrency uses one async dispatcher and the existing separate scanner subprocesses, not extra API-server workers. ZAP’s daemon is gated across its entire reset/fetch/wait/alert-collection stage, with fresh daemon history per job. Dependency-cache stages are serialized to prevent overlapping database writes. Cancellation interrupts only the selected jobs and their process groups; shutdown waits for running jobs to stop. Queue and resource waits appear in logs and job details. Module deadlines and per-target limits are unchanged. Speedup depends on network delays, available HF resources and shared-stage waits.
+
 Development for this deployment is remote-only. Changes are made with connected GitHub tools; GitHub-hosted Actions runs the checks and pushes a passing main branch to the HF Space. Do not follow older local setup/test examples on the owner's device.
 
-The dashboard groups modules into a searchable library and separates pipeline settings, module inputs, Nuclei templates, and identity tools. Settings is always the final main tab. The scope view keeps target selection beside a compact queue panel. Jobs support target/ID, status and module filters, sorting, status dots, reduced-motion-aware animations, individual cancellation, and direct links to job-filtered logs. Findings retain their existing layout.
+The dashboard groups modules into a searchable library and separates pipeline settings, module inputs, Nuclei templates, and identity tools. Settings is always the final main tab. The scope view keeps target selection beside a compact queue panel with optional 1–3 concurrent targets. Jobs support target/ID, status and module filters, sorting, status dots, reduced-motion-aware animations, individual cancellation, and direct links to job-filtered logs. Findings retain their existing layout.
 
 Logs support full-detail search, level/module/event/job/time filters, elapsed-time sorting, structured diagnostics, copy/export of filtered events, and shared pause/resume controls. They show the newest 2,000 events from the session's retained in-memory history; retention metadata makes this window explicit. Archive provider statuses and deadlines are included in stage diagnostics. Backend restarts clear session history.
 

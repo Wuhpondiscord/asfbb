@@ -3,7 +3,6 @@ import os
 import secrets
 import time
 import uuid
-from threading import Lock
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -18,6 +17,7 @@ from .jwtcheck import inspect_jwt
 from .pipeline import katana, nuclei, gau, probe, in_host
 from .review import ACTIVE_MODULES, review, choose_arjun_target, choose_dalfox_target
 from . import config
+from .concurrency import dispatch, module_slot
 from .module_inputs import ModuleInputs
 from .web_modules import MODULES as WEB_MODULES, run_web_module
 
@@ -50,7 +50,6 @@ def log_event(job, event, **details):
                         "target": job.get("target"), "event": event, **details})
     if len(scan_events) > 10000: del scan_events[:1000]
 queue = asyncio.Queue()
-zap_lock = Lock()
 
 sessions = set()
 @app.middleware("http")
@@ -96,6 +95,7 @@ class PipelineOptions(BaseModel):
     zap_endpoint_limit: int = Field(default=config.ZAP_ENDPOINT_LIMIT_DEFAULT, ge=1, le=config.ZAP_ENDPOINT_LIMIT_MAX)
     request_budget: int = Field(default=config.ZAP_REQUEST_BUDGET_DEFAULT, ge=1, le=config.ZAP_REQUEST_BUDGET_MAX)
     discovery_first: bool = True
+    parallel_jobs: int = Field(default=config.PARALLEL_JOBS_DEFAULT, ge=1, le=config.PARALLEL_JOBS_MAX)
 
 class ScanRequest(BaseModel):
     asset_id: str
@@ -120,6 +120,7 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     app.state.worker.cancel()
+    await asyncio.gather(app.state.worker, return_exceptions=True)
 
 @app.get("/")
 async def index():
@@ -225,7 +226,9 @@ async def search_nuclei_templates(q: str = "", page: int = 1):
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "zap": bool(ZAP_KEY)}
+    return {"status": "ok", "zap": bool(ZAP_KEY),
+            "parallel_jobs_default": config.PARALLEL_JOBS_DEFAULT,
+            "parallel_jobs_max": config.PARALLEL_JOBS_MAX}
 
 @app.post("/api/import", dependencies=[Depends(authorize)])
 async def import_file(request: Request, file: UploadFile = File(...)):
@@ -349,7 +352,7 @@ async def create_scan(spec: ScanRequest, request: Request):
     jobs[identifier] = {"owner": request.state.sid, "id": identifier, "asset_id": spec.asset_id, "target": url,
                         "status": "queued", "alerts": [], "error": None, "created": time.time(),
                         "request_count": 0, "cancelled": False, "modules": spec.modules, "endpoints": [], "pipeline": {}, "reviews": [], "probes": [], "options": recorded_options, "progress": 0, "stage": "queued"}
-    log_event(jobs[identifier], "queued", modules=spec.modules)
+    log_event(jobs[identifier], "queued", modules=spec.modules, parallel_jobs=spec.options.parallel_jobs)
     # Public scan results are ephemeral.
     await queue.put((identifier, spec))
     return {"id": identifier, "status": "queued"}
@@ -463,6 +466,7 @@ def cancel_owned_jobs(owner, ids=None):
             queue.task_done()
         else:
             queue.put_nowait(item)
+            queue.task_done()
     return {"cancelled_queued": queued, "cancellation_requested_running": running}
 
 @app.post("/api/scans/cancel-all", dependencies=[Depends(authorize)])
@@ -484,24 +488,7 @@ async def zap_call(client, component, action, params=None):
     return data
 
 async def worker():
-    while True:
-        identifier, spec = await queue.get()
-        task = asyncio.create_task(run_scan_job(identifier, spec))
-        active_scan_tasks[identifier] = task
-        try:
-            await task
-        except asyncio.CancelledError:
-            if asyncio.current_task().cancelling():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-                raise
-            # A cancelled scan does not stop the queue worker.
-        finally:
-            active_scan_tasks.pop(identifier, None)
-            queue.task_done()
+    await dispatch(queue, jobs, active_scan_tasks, run_scan_job, log_event)
 
 async def run_scan_job(identifier, spec):
     job = jobs[identifier]
@@ -519,216 +506,220 @@ async def run_scan_job(identifier, spec):
         for position, module in enumerate(spec.modules):
             if job["cancelled"]:
                 break
-            public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
-            job["stage"] = module
-            started_at = time.monotonic()
-            log_event(job, "stage_started", module=module, position=position + 1, total=len(spec.modules), endpoints=len(endpoints))
-            job["progress"] = round(position * 100 / len(spec.modules))
-            job["pipeline"][module] = "running"
-            try:
-                if module == "gau":
-                    result = await gau(url, host, spec.options.endpoint_limit, spec.options.gau_mode)
-                    for discovered in result["endpoints"]:
-                        endpoint_sources.setdefault(discovered, []).append("gau")
-                    endpoints = list(dict.fromkeys(endpoints + result["endpoints"]))[:spec.options.endpoint_limit]
-                    job["endpoints"] = endpoints[1:]
-                elif module == "katana":
-                    result = await katana(url, host, spec.user_agent, spec.options.katana_depth,
-                                      spec.options.endpoint_limit)
-                    for discovered in result["endpoints"]:
-                        endpoint_sources.setdefault(discovered, []).append("katana")
-                    endpoints = list(dict.fromkeys(endpoints + result["endpoints"]))[:spec.options.endpoint_limit]
-                    job["endpoints"] = endpoints[1:]
-                elif module == "httpx":
-                    result = await probe(endpoints, host, spec.user_agent, spec.options.httpx_limit)
-                    job["probes"] = result["probes"]
-                elif module == "zap-passive":
+            async with module_slot(module, job, log_event,
+                                   enabled=module not in ('depscan', 'trivy') or bool(spec.options.inputs.sbom_text)):
+                public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
+                job["stage"] = module
+                started_at = time.monotonic()
+                log_event(job, "stage_started", module=module, position=position + 1, total=len(spec.modules), endpoints=len(endpoints))
+                job["progress"] = round(position * 100 / len(spec.modules))
+                job["pipeline"][module] = "running"
+                try:
+                    if module == "gau":
+                        result = await gau(url, host, spec.options.endpoint_limit, spec.options.gau_mode)
+                        for discovered in result["endpoints"]:
+                            endpoint_sources.setdefault(discovered, []).append("gau")
+                        endpoints = list(dict.fromkeys(endpoints + result["endpoints"]))[:spec.options.endpoint_limit]
+                        job["endpoints"] = endpoints[1:]
+                    elif module == "katana":
+                        result = await katana(url, host, spec.user_agent, spec.options.katana_depth,
+                                          spec.options.endpoint_limit)
+                        for discovered in result["endpoints"]:
+                            endpoint_sources.setdefault(discovered, []).append("katana")
+                        endpoints = list(dict.fromkeys(endpoints + result["endpoints"]))[:spec.options.endpoint_limit]
+                        job["endpoints"] = endpoints[1:]
+                    elif module == "httpx":
+                        result = await probe(endpoints, host, spec.user_agent, spec.options.httpx_limit)
+                        job["probes"] = result["probes"]
+                    elif module == "zap-passive":
+                        async with httpx.AsyncClient(timeout=20, trust_env=False) as control:
+                        await zap_call(control, "core", "action/newSession", {})
                     # Only the primary target is fetched through ZAP. Additional
-                    # discovered URLs are not automatically crawled by ZAP.
-                    headers = {"User-Agent": spec.user_agent}
-                    profile = accounts.get(spec.account_id) if spec.account_id else None
-                    if profile:
-                        headers.update(profile["headers"])
-                        if profile["cookie"]:
-                            headers["Cookie"] = profile["cookie"]
-                    async with httpx.AsyncClient(timeout=15, follow_redirects=False,
-                                                 trust_env=False, proxy=ZAP_URL, verify=False) as client:
-                        for candidate in endpoints[:spec.options.zap_endpoint_limit]:
-                            if job["cancelled"] or job["request_count"] >= spec.options.request_budget:
-                                break
-                            if not in_host(candidate, host):
-                                continue
-                            for i in range(spec.max_requests):
+                        # discovered URLs are not automatically crawled by ZAP.
+                        headers = {"User-Agent": spec.user_agent}
+                        profile = accounts.get(spec.account_id) if spec.account_id else None
+                        if profile:
+                            headers.update(profile["headers"])
+                            if profile["cookie"]:
+                                headers["Cookie"] = profile["cookie"]
+                        async with httpx.AsyncClient(timeout=15, follow_redirects=False,
+                                                     trust_env=False, proxy=ZAP_URL, verify=False) as client:
+                            for candidate in endpoints[:spec.options.zap_endpoint_limit]:
                                 if job["cancelled"] or job["request_count"] >= spec.options.request_budget:
                                     break
-                                public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
-                                try:
-                                    response = await client.get(candidate, headers=headers)
-                                    job["request_count"] += 1
-                                    job["last_status"] = response.status_code
-                                except httpx.HTTPError as exc:
-                                    job["error"] = "Target fetch failed: " + exc.__class__.__name__
+                                if not in_host(candidate, host):
+                                    continue
+                                for i in range(spec.max_requests):
+                                    if job["cancelled"] or job["request_count"] >= spec.options.request_budget:
+                                        break
+                                    public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
+                                    try:
+                                        response = await client.get(candidate, headers=headers)
+                                        job["request_count"] += 1
+                                        job["last_status"] = response.status_code
+                                    except httpx.HTTPError as exc:
+                                        job["error"] = "Target fetch failed: " + exc.__class__.__name__
+                                        break
+                                    await asyncio.sleep(spec.delay_seconds)
+                        # ZAP's passive scanner is asynchronous and its queue is global
+                        # to this process, not specific to the current host.
+                        pending_records = 0
+                        wait_checks = 0
+                        zap_alerts = []
+                        async with httpx.AsyncClient(timeout=20, trust_env=False) as z:
+                            from .zap_control import wait_for_passive_queue
+                            queue_report = await wait_for_passive_queue(
+                                z, zap_call, host,
+                                limit=config.ZAP_PASSIVE_POLL_LIMIT,
+                                interval=config.ZAP_PASSIVE_POLL_SECONDS,
+                                stall_checks=config.ZAP_PASSIVE_STALL_CHECKS)
+                            pending_records = queue_report["remaining"]
+                            wait_checks = queue_report["checks"]
+                            origin_url = urlsplit(url)._replace(path="/", query="", fragment="").geturl()
+                            for offset in range(0, config.ZAP_ALERT_FETCH_LIMIT, 100):
+                                page = await zap_call(z, "core", "view/alerts", {
+                                    "baseurl": origin_url, "start": str(offset), "count": "100"})
+                                entries = page.get("alerts", [])
+                                if not isinstance(entries, list):
                                     break
-                                await asyncio.sleep(spec.delay_seconds)
-                    # ZAP's passive scanner is asynchronous and its queue is global
-                    # to this process, not specific to the current host.
-                    pending_records = 0
-                    wait_checks = 0
-                    zap_alerts = []
-                    async with httpx.AsyncClient(timeout=20, trust_env=False) as z:
-                        from .zap_control import wait_for_passive_queue
-                        queue_report = await wait_for_passive_queue(
-                            z, zap_call, host,
-                            limit=config.ZAP_PASSIVE_POLL_LIMIT,
-                            interval=config.ZAP_PASSIVE_POLL_SECONDS,
-                            stall_checks=config.ZAP_PASSIVE_STALL_CHECKS)
-                        pending_records = queue_report["remaining"]
-                        wait_checks = queue_report["checks"]
-                        origin_url = urlsplit(url)._replace(path="/", query="", fragment="").geturl()
-                        for offset in range(0, config.ZAP_ALERT_FETCH_LIMIT, 100):
-                            page = await zap_call(z, "core", "view/alerts", {
-                                "baseurl": origin_url, "start": str(offset), "count": "100"})
-                            entries = page.get("alerts", [])
-                            if not isinstance(entries, list):
-                                break
-                            zap_alerts.extend(entries)
-                            if len(entries) < 100:
-                                break
-                    observed_keys = set()
-                    captured = []
-                    for a in zap_alerts:
-                        if not isinstance(a, dict) or urlsplit(a.get("url") or "").hostname != host:
-                            continue
-                        key = (a.get("pluginId") or a.get("name"), a.get("url"),
-                               a.get("param") or "")
-                        if key in observed_keys:
-                            continue
-                        observed_keys.add(key)
-                        captured.append({
-                            "source": "zap", "name": a.get("name"), "risk": a.get("risk"),
-                            "confidence": a.get("confidence"), "url": a.get("url"),
-                            "description": (a.get("description") or "")[:1000],
-                            "plugin_id": a.get("pluginId"), "parameter": a.get("param"),
-                        })
-                    job["alerts"].extend(captured)
-                    result = {
-                        "status": "completed" if pending_records <= 0 else "partial",
-                        "reason": (queue_report["reason"] if pending_records else ""),
-                        "pending_records": pending_records,
-                        "queue_stalled": queue_report["stalled"],
-                        "host_tasks_running": queue_report["host_tasks_running"],
-                        "global_tasks_running": queue_report["global_tasks_running"],
-                        "alerts": captured,
-                        "alerts_collected": len(captured),
-                        "queue_scope": "global",
-                        "wait_checks": wait_checks,
-                    }
-                elif module == "nuclei":
-                    selection = spec.options.nuclei
-                    try:
-                        remote = await nuclei_catalog.community_files(selection.community_paths)
-                    except (ValueError, httpx.HTTPError) as exc:
-                        raise ValueError("Nuclei template download failed: " + str(exc)[:160])
-                    result = await nuclei(
-                        url, host, spec.user_agent, endpoints,
-                        selection.default_ids, remote, selection.custom_templates)
-                    job["alerts"].extend(result["alerts"])
-                elif module in WEB_MODULES:
-                    result = await run_web_module(
-                        module, url, host, spec.user_agent, spec.delay_seconds, endpoints, spec.options.inputs)
-                    job["reviews"].append(result)
-                    job["alerts"].extend(result.get("alerts", []))
-                    job["probes"].extend(result.get("probes", []))
-                    if result.get("hosts"):
-                        job.setdefault("discovered_hosts", []).extend(result["hosts"])
-                    if result.get("endpoints"):
-                        for candidate in result["endpoints"]:
-                            if in_host(candidate, host):
-                                endpoint_sources.setdefault(candidate, []).append(module)
-                                if candidate not in endpoints:
-                                    endpoints.append(candidate)
-                        endpoints = endpoints[:spec.options.endpoint_limit]
-                        job["endpoints"] = endpoints[1:]
-                elif module in ACTIVE_MODULES:
-                    review_url = (choose_arjun_target(url, endpoints, host)
-                                  if module == "arjun" else
-                                  choose_dalfox_target(url, job.get("parameters", []), host)
-                                  if module == "dalfox" else url)
-                    result = await review(module, review_url, host)
-                    job["reviews"].append(result)
-                    if module == "dalfox":
-                        job["alerts"].extend(result.get("findings", []))
-                    if module == "ffuf":
-                        discovered_urls = [
-                            candidate for candidate in result.get("endpoints", [])
-                            if in_host(candidate, host)
-                        ]
-                        for candidate in discovered_urls:
-                            endpoint_sources.setdefault(candidate, []).append("ffuf")
-                        endpoints = list(dict.fromkeys(
-                            endpoints + discovered_urls))[:spec.options.endpoint_limit]
-                        job["endpoints"] = endpoints[1:]
-                    if module == "arjun":
-                        job["parameters"] = [
-                            item for item in result.get("parameters", [])
-                            if in_host(item.get("url", ""), host)
-                        ]
-            except Exception as exc:
-                log_event(job, "stage_exception", module=module,
-                          error_type=exc.__class__.__name__)
-                result = {"status":"failed", "reason":"Module exception: "+exc.__class__.__name__}
-            job["pipeline"][module] = result["status"]
-            summary = str(result.get("output") or "")
-            if not summary:
-                summary = ("Discovered " + str(len(result.get("endpoints", []))) +
-                           " endpoints; " + str(len(result.get("probes", []))) +
-                           " probes; " + str(len(result.get("alerts", []))) + " module alerts")
-            if module == "gau":
-                summary = str(result.get("summary") or summary) + (
-                    "; " + str(result.get("reason")) if result.get("reason") else "")
-            if module == "nuclei":
-                summary = ("Nuclei templates: " +
-                           ", ".join(result.get("templates", ["unknown"])) +
-                           "; URLs: " + str(result.get("targets_checked", 0)) +
-                           "; matches: " + str(len(result.get("alerts", []))))
-            if module == "arjun":
-                summary = (str(len(result.get("parameters", []))) +
-                           " structured parameters. Target: " + str(result.get("target", url)) +
-                           ". " + summary)
-            if module == "dalfox":
-                summary = (str(len(result.get("findings", []))) +
-                           " unverified Dalfox findings; " + summary)
-            if module == "zap-passive":
-                # A failed ZAP API call has no queue report. Formatting its
-                # diagnostics must not raise and abort the remaining modules.
-                summary = ("ZAP-proxied requests: " + str(job["request_count"]) +
-                           "; alerts: " + str(len(result.get("alerts", []))) +
-                           "; global queued passive records: " + str(result.get("pending_records", "unknown")) +
-                           "; wait checks: " + str(result.get("wait_checks", 0)) +
-                           "; host tasks running: " + str(result.get("host_tasks_running", "unknown")) +
-                           "; stalled: " + str(result.get("queue_stalled", "unknown")))
-                if result.get("reason"):
-                    summary += "; " + str(result["reason"])
-            summary = summary[:1200]
-            counts = {
-                "new_endpoints": len(result.get("endpoints", [])),
-                "new_probes": len(result.get("probes", [])),
-                "new_alerts": len(result.get("alerts", [])) + len(result.get("findings", [])),
-                "new_parameters": len(result.get("parameters", [])),
-            }
-            elapsed_ms = round((time.monotonic() - started_at) * 1000)
-            job.setdefault("stage_details", {})[module] = {"status": result["status"], "elapsed_ms": elapsed_ms, "reason": str(result.get("reason", ""))[:250], "summary": summary, "counts": counts}
-            diagnostics = {}
-            if module == "gau":
-                diagnostics = {"coverage": result.get("coverage"), "mode": result.get("mode"),
-                               "providers": result.get("providers", [])}
-            if result.get("exit_code") is not None:
-                diagnostics["exit_code"] = result["exit_code"]
-            if result.get("requests") is not None:
-                diagnostics["module_requests"] = result["requests"]
-            log_event(job, "stage_finished", module=module, status=result["status"], elapsed_ms=elapsed_ms, reason=str(result.get("reason", ""))[:250], summary=summary[:1200], counts=counts, alerts=len(job.get("alerts", [])), endpoints=len(job.get("endpoints", [])), diagnostics=diagnostics)
-            job["endpoint_sources"] = {key: sorted(set(value)) for key, value in endpoint_sources.items() if key in endpoints}
-            job["progress"] = round((position + 1) * 100 / len(spec.modules))
+                                zap_alerts.extend(entries)
+                                if len(entries) < 100:
+                                    break
+                        observed_keys = set()
+                        captured = []
+                        for a in zap_alerts:
+                            if not isinstance(a, dict) or urlsplit(a.get("url") or "").hostname != host:
+                                continue
+                            key = (a.get("pluginId") or a.get("name"), a.get("url"),
+                                   a.get("param") or "")
+                            if key in observed_keys:
+                                continue
+                            observed_keys.add(key)
+                            captured.append({
+                                "source": "zap", "name": a.get("name"), "risk": a.get("risk"),
+                                "confidence": a.get("confidence"), "url": a.get("url"),
+                                "description": (a.get("description") or "")[:1000],
+                                "plugin_id": a.get("pluginId"), "parameter": a.get("param"),
+                            })
+                        job["alerts"].extend(captured)
+                        result = {
+                            "status": "completed" if pending_records <= 0 else "partial",
+                            "reason": (queue_report["reason"] if pending_records else ""),
+                            "pending_records": pending_records,
+                            "queue_stalled": queue_report["stalled"],
+                            "host_tasks_running": queue_report["host_tasks_running"],
+                            "global_tasks_running": queue_report["global_tasks_running"],
+                            "alerts": captured,
+                            "alerts_collected": len(captured),
+                            "queue_scope": "global",
+                            "wait_checks": wait_checks,
+                        }
+                    elif module == "nuclei":
+                        selection = spec.options.nuclei
+                        try:
+                            remote = await nuclei_catalog.community_files(selection.community_paths)
+                        except (ValueError, httpx.HTTPError) as exc:
+                            raise ValueError("Nuclei template download failed: " + str(exc)[:160])
+                        result = await nuclei(
+                            url, host, spec.user_agent, endpoints,
+                            selection.default_ids, remote, selection.custom_templates)
+                        job["alerts"].extend(result["alerts"])
+                    elif module in WEB_MODULES:
+                        result = await run_web_module(
+                            module, url, host, spec.user_agent, spec.delay_seconds, endpoints, spec.options.inputs)
+                        job["reviews"].append(result)
+                        job["alerts"].extend(result.get("alerts", []))
+                        job["probes"].extend(result.get("probes", []))
+                        if result.get("hosts"):
+                            job.setdefault("discovered_hosts", []).extend(result["hosts"])
+                        if result.get("endpoints"):
+                            for candidate in result["endpoints"]:
+                                if in_host(candidate, host):
+                                    endpoint_sources.setdefault(candidate, []).append(module)
+                                    if candidate not in endpoints:
+                                        endpoints.append(candidate)
+                            endpoints = endpoints[:spec.options.endpoint_limit]
+                            job["endpoints"] = endpoints[1:]
+                    elif module in ACTIVE_MODULES:
+                        review_url = (choose_arjun_target(url, endpoints, host)
+                                      if module == "arjun" else
+                                      choose_dalfox_target(url, job.get("parameters", []), host)
+                                      if module == "dalfox" else url)
+                        result = await review(module, review_url, host)
+                        job["reviews"].append(result)
+                        if module == "dalfox":
+                            job["alerts"].extend(result.get("findings", []))
+                        if module == "ffuf":
+                            discovered_urls = [
+                                candidate for candidate in result.get("endpoints", [])
+                                if in_host(candidate, host)
+                            ]
+                            for candidate in discovered_urls:
+                                endpoint_sources.setdefault(candidate, []).append("ffuf")
+                            endpoints = list(dict.fromkeys(
+                                endpoints + discovered_urls))[:spec.options.endpoint_limit]
+                            job["endpoints"] = endpoints[1:]
+                        if module == "arjun":
+                            job["parameters"] = [
+                                item for item in result.get("parameters", [])
+                                if in_host(item.get("url", ""), host)
+                            ]
+                except Exception as exc:
+                    log_event(job, "stage_exception", module=module,
+                              error_type=exc.__class__.__name__)
+                    result = {"status":"failed", "reason":"Module exception: "+exc.__class__.__name__}
+                job["pipeline"][module] = result["status"]
+                summary = str(result.get("output") or "")
+                if not summary:
+                    summary = ("Discovered " + str(len(result.get("endpoints", []))) +
+                               " endpoints; " + str(len(result.get("probes", []))) +
+                               " probes; " + str(len(result.get("alerts", []))) + " module alerts")
+                if module == "gau":
+                    summary = str(result.get("summary") or summary) + (
+                        "; " + str(result.get("reason")) if result.get("reason") else "")
+                if module == "nuclei":
+                    summary = ("Nuclei templates: " +
+                               ", ".join(result.get("templates", ["unknown"])) +
+                               "; URLs: " + str(result.get("targets_checked", 0)) +
+                               "; matches: " + str(len(result.get("alerts", []))))
+                if module == "arjun":
+                    summary = (str(len(result.get("parameters", []))) +
+                               " structured parameters. Target: " + str(result.get("target", url)) +
+                               ". " + summary)
+                if module == "dalfox":
+                    summary = (str(len(result.get("findings", []))) +
+                               " unverified Dalfox findings; " + summary)
+                if module == "zap-passive":
+                    # A failed ZAP API call has no queue report. Formatting its
+                    # diagnostics must not raise and abort the remaining modules.
+                    summary = ("ZAP-proxied requests: " + str(job["request_count"]) +
+                               "; alerts: " + str(len(result.get("alerts", []))) +
+                               "; global queued passive records: " + str(result.get("pending_records", "unknown")) +
+                               "; wait checks: " + str(result.get("wait_checks", 0)) +
+                               "; host tasks running: " + str(result.get("host_tasks_running", "unknown")) +
+                               "; stalled: " + str(result.get("queue_stalled", "unknown")))
+                    if result.get("reason"):
+                        summary += "; " + str(result["reason"])
+                summary = summary[:1200]
+                counts = {
+                    "new_endpoints": len(result.get("endpoints", [])),
+                    "new_probes": len(result.get("probes", [])),
+                    "new_alerts": len(result.get("alerts", [])) + len(result.get("findings", [])),
+                    "new_parameters": len(result.get("parameters", [])),
+                }
+                elapsed_ms = round((time.monotonic() - started_at) * 1000)
+                job.setdefault("stage_details", {})[module] = {"status": result["status"], "elapsed_ms": elapsed_ms, "reason": str(result.get("reason", ""))[:250], "summary": summary, "counts": counts}
+                diagnostics = {}
+                if module == "gau":
+                    diagnostics = {"coverage": result.get("coverage"), "mode": result.get("mode"),
+                                   "providers": result.get("providers", [])}
+                if result.get("exit_code") is not None:
+                    diagnostics["exit_code"] = result["exit_code"]
+                if result.get("requests") is not None:
+                    diagnostics["module_requests"] = result["requests"]
+                log_event(job, "stage_finished", module=module, status=result["status"], elapsed_ms=elapsed_ms, reason=str(result.get("reason", ""))[:250], summary=summary[:1200], counts=counts, alerts=len(job.get("alerts", [])), endpoints=len(job.get("endpoints", [])), diagnostics=diagnostics)
+                job["endpoint_sources"] = {key: sorted(set(value)) for key, value in endpoint_sources.items() if key in endpoints}
+                job["progress"] = round((position + 1) * 100 / len(spec.modules))
         stage_statuses = list(job["pipeline"].values())
         degraded = any(status in ("failed", "timeout", "unavailable", "partial") for status in stage_statuses)
         job["status"] = "cancelled" if job["cancelled"] else ("partial" if degraded else "completed")
