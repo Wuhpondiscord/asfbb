@@ -91,8 +91,8 @@ def test_queued_job_records_the_previewed_plan_but_manual_remains_exact():
     main.jobs.clear()
     main.queue = asyncio.Queue()
     async def no_scan(*args): pass
-    with TestClient(main.app) as client, patch.object(main, "public_host"), \
-         patch.object(main, "run_scan_job", no_scan):
+    with patch.object(main, "public_host"), patch.object(main, "run_scan_job", no_scan), \
+         TestClient(main.app) as client:
         owner = client.get("/api/health").headers["x-asfb-session"]
         main.assets["plan-target"] = {"id": "plan-target", "owner": owner,
             "name": "https://example.org/", "compatibility": "web"}
