@@ -152,6 +152,7 @@ jobs:
             /opt/wafw00f/bin/python /app/tests/analysis_offline_smoke.py wafw00f
             /opt/asfb-venv/bin/python /app/tests/analysis_offline_smoke.py semgrep
             /opt/protocol/bin/python /app/tests/protocol_offline_smoke.py
+            /opt/asfb-venv/bin/python /app/tests/replay_cli_smoke.py
           '
       - name: Validate Hugging Face token
         env:
