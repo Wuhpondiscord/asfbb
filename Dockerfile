@@ -36,9 +36,17 @@ RUN python -m venv --copies /opt/nettacker && /opt/nettacker/bin/pip install --n
 # no local model backends or GPU frameworks are used in the HF integration.
 RUN python -m venv --copies /opt/garak && /opt/garak/bin/pip install --no-cache-dir --no-deps garak==0.17.1 && /opt/garak/bin/pip install --no-cache-dir requests backoff jsonpath-ng PyYAML xdg-base-dirs colorama tqdm
 
+FROM python:3.12-slim-bookworm AS idor-tools
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
+# Pin the upstream core and retain its MIT license. No GUI or upstream CLI.
+RUN mkdir -p /opt/idor-forge && curl -fsSL https://raw.githubusercontent.com/errorfiathck/IDOR-Forge/bc37cfc9143b40d7f91d1fa25753a22e908f4e84/core/IDORChecker.py -o /opt/idor-forge/IDORChecker.py && curl -fsSL https://raw.githubusercontent.com/errorfiathck/IDOR-Forge/bc37cfc9143b40d7f91d1fa25753a22e908f4e84/LICENSE -o /opt/idor-forge/LICENSE
+RUN python -m venv --copies /opt/idor-forge-venv && /opt/idor-forge-venv/bin/pip install --no-cache-dir numpy==1.26.4 matplotlib==3.8.4 tabulate==0.9.0 requests==2.32.5 colorama==0.4.6 beautifulsoup4==4.14.3 pydantic==2.12.3
+
 FROM zaproxy/zap-stable
 USER root
 COPY --from=wp-tools /usr/local/ /usr/local/
+COPY --from=idor-tools /opt/idor-forge /opt/idor-forge
+COPY --from=idor-tools /opt/idor-forge-venv /opt/idor-forge-venv
 COPY --from=final-python-tools /opt/depscan /opt/depscan
 COPY --from=final-python-tools /opt/nettacker /opt/nettacker
 COPY --from=final-python-tools /opt/garak /opt/garak

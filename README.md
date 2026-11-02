@@ -5,6 +5,25 @@ sdk: docker
 app_port: 7860
 ---
 
+## Current remote workflow and dashboard
+
+Development for this deployment is remote-only. Changes are made with connected GitHub tools; GitHub-hosted Actions runs the checks and pushes a passing main branch to the HF Space. Do not follow older local setup/test examples on the owner's device.
+
+The dashboard groups modules into a searchable library and separates pipeline settings, module inputs, Nuclei templates, and identity tools. Settings is always the final main tab. The scope view keeps target selection beside a compact queue panel. Jobs support target/ID, status and module filters, sorting, status dots, reduced-motion-aware animations, individual cancellation, and direct links to job-filtered logs. Findings retain their existing layout.
+
+Logs support full-detail search, level/module/event/job/time filters, elapsed-time sorting, structured diagnostics, copy/export of filtered events, and shared pause/resume controls. They show the newest 2,000 events from the session's retained in-memory history; retention metadata makes this window explicit. Archive provider statuses and deadlines are included in stage diagnostics. Backend restarts clear session history.
+
+### IDOR-Forge comparison profile
+
+The HF image pins [IDOR-Forge's MIT-licensed core](https://github.com/errorfiathck/IDOR-Forge/tree/bc37cfc9143b40d7f91d1fa25753a22e908f4e84) and retains its license in /opt/idor-forge/LICENSE. The upstream response comparison and heuristic methods run in a separate environment. This is a limited anonymous GET comparison profile, not the full upstream CLI or GUI.
+
+Enable IDOR-Forge and provide a same-origin endpoint path, one query parameter, a baseline reference ID and up to three distinct reference IDs under Settings → Module inputs. Without applicable inputs it skips, including when all modules are enabled. It needs no API key. The profile permits at most four requests, no redirects, no retries, bounded response bodies, an overall deadline and public-host revalidation before each request. It stops on rate limits. No upstream random payload generation, login, POST/PUT/DELETE, evasion or reports run. Account profiles are not used by active modules.
+
+Identical responses are not flagged. Similarity matches are informational, low-confidence review candidates: anonymous response differences cannot prove object ownership or broken authorization. Verify with two authorized test accounts before reporting. Reference values and response bodies are not returned in jobs or logs. The current profile does not implement authenticated differential two-account IDOR replay.
+
+Regression tests, installed-engine offline smoke checks and a mocked-API Chromium dashboard check run only on GitHub. No live target scans are used for verification. UI review screenshots remain in the GitHub Actions artifact.
+
+
 # ASFB — Bug bounty scope and ZAP workspace
 
 A self-hosted, API-driven workbench for importing HackerOne scope exports, prioritizing web targets, configuring testing identities, and running **rate-limited passive checks** using the standard OWASP ZAP daemon.

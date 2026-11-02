@@ -34,7 +34,20 @@ accounts = {}
 jobs = {}
 scan_events = []
 def log_event(job, event, **details):
-    scan_events.append({"time": time.time(), "owner": job.get("owner"), "job_id": job.get("id"), "target": job.get("target"), "event": event, **details})
+    now = time.time()
+    status = details.get("status", "")
+    level = ("error" if event in ("failed", "stage_exception") or status == "failed"
+             else "warning" if status in ("timeout", "unavailable", "partial", "skipped") or
+             event in ("cancelled", "interrupted", "cancellation_requested") else "info")
+    if event == "started":
+        job["started"] = now
+    if event in ("finished", "failed", "cancelled", "interrupted"):
+        job["finished"] = now
+        if job.get("started"):
+            details.setdefault("elapsed_ms", round((now - job["started"]) * 1000))
+    scan_events.append({"event_id": uuid.uuid4().hex, "time": now, "level": level,
+                        "owner": job.get("owner"), "job_id": job.get("id"),
+                        "target": job.get("target"), "event": event, **details})
     if len(scan_events) > 10000: del scan_events[:1000]
 queue = asyncio.Queue()
 zap_lock = Lock()
@@ -324,7 +337,8 @@ async def create_scan(spec: ScanRequest, request: Request):
                 and existing.get("asset_id") == spec.asset_id
                 and existing.get("status") in ("queued", "running")
                 and existing.get("modules") == spec.modules
-                and not (spec.options.inputs.source_text or spec.options.inputs.sbom_text or spec.options.inputs.llm_path)
+                and not (spec.options.inputs.source_text or spec.options.inputs.sbom_text or spec.options.inputs.llm_path
+                         or spec.options.inputs.idor_path or spec.options.inputs.idor_values)
                 and existing.get("options", {}).get("inputs", {}).get("api_target", False) == spec.options.inputs.api_target):
             return {"id": existing["id"], "status": existing["status"], "reused": True}
     identifier = uuid.uuid4().hex
@@ -400,7 +414,10 @@ def clear_findings(request: Request):
 
 @app.get("/api/logs", dependencies=[Depends(authorize)])
 def scan_logs(request: Request):
-    return {"events": [{k: v for k,v in row.items() if k != "owner"} for row in scan_events if row["owner"] == request.state.sid][-2000:]}
+    owned = [row for row in scan_events if row["owner"] == request.state.sid]
+    return {"events": [{k: v for k, v in row.items() if k != "owner"} for row in owned[-2000:]],
+            "total": len(owned), "returned": min(len(owned), 2000),
+            "truncated": len(owned) > 2000, "storage": "session-memory"}
 
 @app.get("/api/report", dependencies=[Depends(authorize)])
 def full_report(request: Request):
@@ -699,7 +716,15 @@ async def run_scan_job(identifier, spec):
             }
             elapsed_ms = round((time.monotonic() - started_at) * 1000)
             job.setdefault("stage_details", {})[module] = {"status": result["status"], "elapsed_ms": elapsed_ms, "reason": str(result.get("reason", ""))[:250], "summary": summary, "counts": counts}
-            log_event(job, "stage_finished", module=module, status=result["status"], elapsed_ms=elapsed_ms, reason=str(result.get("reason", ""))[:250], summary=summary[:350], counts=counts, alerts=len(job.get("alerts", [])), endpoints=len(job.get("endpoints", [])))
+            diagnostics = {}
+            if module == "gau":
+                diagnostics = {"coverage": result.get("coverage"), "mode": result.get("mode"),
+                               "providers": result.get("providers", [])}
+            if result.get("exit_code") is not None:
+                diagnostics["exit_code"] = result["exit_code"]
+            if result.get("requests") is not None:
+                diagnostics["module_requests"] = result["requests"]
+            log_event(job, "stage_finished", module=module, status=result["status"], elapsed_ms=elapsed_ms, reason=str(result.get("reason", ""))[:250], summary=summary[:1200], counts=counts, alerts=len(job.get("alerts", [])), endpoints=len(job.get("endpoints", [])), diagnostics=diagnostics)
             job["endpoint_sources"] = {key: sorted(set(value)) for key, value in endpoint_sources.items() if key in endpoints}
             job["progress"] = round((position + 1) * 100 / len(spec.modules))
         stage_statuses = list(job["pipeline"].values())

@@ -22,7 +22,7 @@ jobs:
           ZAP_API_KEY: test-key
         run: python3 -m pytest -q tests/
       - name: Validate Python backend syntax
-        run: python3 -m py_compile app/main.py app/pipeline.py app/web_modules.py app/client_modules.py app/wapiti_guard.py app/wapiti_runner.py app/config.py app/module_inputs.py app/final_modules.py app/final_module_names.py app/nettacker_runner.py app/garak_runner.py app/template_builder.py app/review.py app/zap_control.py app/scope.py app/jwtcheck.py app/storage.py
+        run: python3 -m py_compile app/idor_module.py app/idor_runner.py app/main.py app/pipeline.py app/web_modules.py app/client_modules.py app/wapiti_guard.py app/wapiti_runner.py app/config.py app/module_inputs.py app/final_modules.py app/final_module_names.py app/nettacker_runner.py app/garak_runner.py app/template_builder.py app/review.py app/zap_control.py app/scope.py app/jwtcheck.py app/storage.py
       - name: Validate dashboard JavaScript syntax
         run: |
           python3 - <<'PY'
@@ -33,6 +33,21 @@ jobs:
           Path("/tmp/asfb-inline.js").write_text(js)
           PY
           node --check /tmp/asfb-inline.js
+      - name: Verify dashboard in Chromium with mocked APIs
+        env:
+          ASFB_PLAYWRIGHT_MODULE: ${{ runner.temp }}/asfb-ui/node_modules/playwright
+        run: |
+          npm install --prefix "$RUNNER_TEMP/asfb-ui" --no-save playwright@1.56.1
+          "$RUNNER_TEMP/asfb-ui/node_modules/.bin/playwright" install --with-deps chromium
+          node tests/dashboard_browser_smoke.cjs
+      - name: Save remote UI review screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-ui-review
+          path: ui-review/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Build and verify scanner container
         run: |
           docker build --progress plain -t asfb-ci .
@@ -57,6 +72,7 @@ jobs:
             grep -q -- "--reachability-analyzer" /tmp/depscan-help
             /opt/depscan/bin/depscan-vdb download --help > /tmp/depscan-vdb-help
             grep -q -- "--scope" /tmp/depscan-vdb-help
+            /opt/idor-forge-venv/bin/python /app/tests/idor_offline_smoke.py
             /opt/garak/bin/python /app/tests/final_python_smoke.py garak
             /opt/nettacker/bin/python /app/tests/final_python_smoke.py nettacker
             /opt/asfb-venv/bin/python -c "from pathlib import Path; from app.template_builder import build_draft; Path(\"/tmp/asfb-draft.yaml\").write_text(build_draft(\"CI observation\", \"/status\", \"healthy\"))"
