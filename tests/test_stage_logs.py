@@ -4,12 +4,15 @@ from app import pipeline
 
 def test_timeout_retains_partial_output():
     class FakeProc:
-        def __init__(self): self.killed=False
-        def kill(self): self.killed=True
+        def __init__(self):
+            self.returncode = None
+            self.stopped = asyncio.Event()
+        def kill(self):
+            self.returncode = -9
+            self.stopped.set()
         async def communicate(self):
-            if not self.killed:
-                await asyncio.sleep(1)
-            return b"discovered https://example.org/a\\n",b"partial stderr"
+            await self.stopped.wait()
+            return b"discovered https://example.org/a\n", b"partial stderr"
     async def launch(*args,**kwargs): return FakeProc()
     with patch.object(pipeline.asyncio,"create_subprocess_exec",launch):
         lines,status=asyncio.run(pipeline.execute(["fake"],0.001))
