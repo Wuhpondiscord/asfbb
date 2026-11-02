@@ -124,3 +124,7 @@ def test_parameterized_url_does_not_turn_ffuf_path_discovery_into_query_fuzzing(
     from app.review import command
     args = command("ffuf", "https://example.org/search?q=test", "example.org")
     assert args[args.index("-u") + 1] == "https://example.org/search/FUZZ"
+
+def test_unterminated_csv_quote_is_reported_as_invalid_input():
+    with pytest.raises(ValueError, match="Malformed"):
+        parse_targets('url,description\n"https://example.org/,unfinished', "targets.csv")

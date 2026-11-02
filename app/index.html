@@ -193,10 +193,10 @@ async function upload(){
  }catch(e){message('Could not import targets: '+e.message,true)}
  finally{button.disabled=false}
 }
-let formatHelpPinned=false;
-function showFormatHelp(){el('targetFormatExamples').hidden=false;el('formatHelpButton').setAttribute('aria-expanded','true')}
-function hideFormatHelp(){if(!formatHelpPinned&&!el('formatHelp').contains(document.activeElement))closeFormatHelp()}
-function closeFormatHelp(){formatHelpPinned=false;el('targetFormatExamples').hidden=true;el('formatHelpButton').setAttribute('aria-expanded','false')}
+let formatHelpPinned=false,formatHelpHideTimer=null;
+function showFormatHelp(){clearTimeout(formatHelpHideTimer);el('targetFormatExamples').hidden=false;el('formatHelpButton').setAttribute('aria-expanded','true')}
+function hideFormatHelp(){clearTimeout(formatHelpHideTimer);formatHelpHideTimer=setTimeout(()=>{if(!formatHelpPinned&&!el('formatHelp').matches(':hover')&&!el('formatHelp').contains(document.activeElement))closeFormatHelp()},150)}
+function closeFormatHelp(){clearTimeout(formatHelpHideTimer);formatHelpPinned=false;el('targetFormatExamples').hidden=true;el('formatHelpButton').setAttribute('aria-expanded','false')}
 function toggleFormatHelp(){formatHelpPinned=!formatHelpPinned;if(formatHelpPinned)showFormatHelp();else closeFormatHelp()}
 document.addEventListener('keydown',event=>{if(event.key==='Escape')closeFormatHelp()});
 document.addEventListener('pointerdown',event=>{if(!el('formatHelp').contains(event.target))closeFormatHelp()});

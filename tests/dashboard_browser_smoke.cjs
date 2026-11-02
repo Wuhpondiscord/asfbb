@@ -62,7 +62,7 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
  assert(!(await page.getByRole('tooltip').isVisible()));
  await page.locator('#formatHelpButton').click();
  assert(await page.getByRole('tooltip').isVisible());
- await page.locator('#targetText').click();
+ await page.locator('header h1').click();
  assert(!(await page.getByRole('tooltip').isVisible()));
  await page.locator('#targetText').fill('https://single.example.org/search?q=test');
  await page.locator('#addTargets').click();

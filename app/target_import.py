@@ -132,12 +132,12 @@ def _parse_targets(content, filename="", format="auto"):
             # Recognized headers distinguish CSV from URLs containing commas.
             first = next((line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")), "")
             delimiter = "\t" if "\t" in first else ","
-            fields = next(csv.reader([first], delimiter=delimiter), [])
+            fields = next(csv.reader([first], delimiter=delimiter, strict=True), [])
             chosen = ("tsv" if delimiter == "\t" else "csv") if has_target_column(fields) else "text"
     rows, assets = [], None
     if chosen in ("csv", "tsv"):
         delimiter = "\t" if chosen == "tsv" else ","
-        reader = csv.reader(io.StringIO(text), delimiter=delimiter)
+        reader = csv.reader(io.StringIO(text), delimiter=delimiter, strict=True)
         first = next(reader, [])
         if has_target_column(first):
             assets = parse_csv(text.encode("utf-8"), delimiter)

@@ -81,7 +81,7 @@ def asset_from_row(row, index):
 def parse_csv(content, delimiter=","):
     if len(content) > 2_000_000:
         raise ValueError("CSV too large (max 2 MB)")
-    reader = csv.DictReader(io.StringIO(content.decode("utf-8-sig")), delimiter=delimiter)
+    reader = csv.DictReader(io.StringIO(content.decode("utf-8-sig")), delimiter=delimiter, strict=True)
     if not reader.fieldnames:
         raise ValueError("CSV is empty")
     assets = []
