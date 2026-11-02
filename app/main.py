@@ -519,13 +519,14 @@ async def run_scan_job(identifier, spec):
                     wait_checks = 0
                     zap_alerts = []
                     async with httpx.AsyncClient(timeout=20, trust_env=False) as z:
-                        for _ in range(config.ZAP_PASSIVE_POLL_LIMIT):
-                            queue_info = await zap_call(z, "pscan", "view/recordsToScan", {})
-                            pending_records = int(queue_info.get("recordsToScan", 0))
-                            wait_checks += 1
-                            if pending_records <= 0:
-                                break
-                            await asyncio.sleep(config.ZAP_PASSIVE_POLL_SECONDS)
+                        from .zap_control import wait_for_passive_queue
+                        queue_report = await wait_for_passive_queue(
+                            z, zap_call, host,
+                            limit=config.ZAP_PASSIVE_POLL_LIMIT,
+                            interval=config.ZAP_PASSIVE_POLL_SECONDS,
+                            stall_checks=config.ZAP_PASSIVE_STALL_CHECKS)
+                        pending_records = queue_report["remaining"]
+                        wait_checks = queue_report["checks"]
                         origin_url = urlsplit(url)._replace(path="/", query="", fragment="").geturl()
                         for offset in range(0, config.ZAP_ALERT_FETCH_LIMIT, 100):
                             page = await zap_call(z, "core", "view/alerts", {
@@ -555,10 +556,11 @@ async def run_scan_job(identifier, spec):
                     job["alerts"].extend(captured)
                     result = {
                         "status": "completed" if pending_records <= 0 else "partial",
-                        "reason": (f"ZAP global passive queue still has {pending_records} pending records "
-                                   f"after {wait_checks} checks; some passive alerts may arrive later."
-                                   if pending_records else ""),
+                        "reason": (queue_report["reason"] if pending_records else ""),
                         "pending_records": pending_records,
+                        "queue_stalled": queue_report["stalled"],
+                        "host_tasks_running": queue_report["host_tasks_running"],
+                        "global_tasks_running": queue_report["global_tasks_running"],
                         "alerts": captured,
                         "alerts_collected": len(captured),
                         "queue_scope": "global",
@@ -627,7 +629,9 @@ async def run_scan_job(identifier, spec):
                 summary = ("ZAP-proxied requests: " + str(job["request_count"]) +
                            "; alerts: " + str(len(job["alerts"])) +
                            "; global queued passive records: " + str(result["pending_records"]) +
-                           "; wait checks: " + str(result["wait_checks"]))
+                           "; wait checks: " + str(result["wait_checks"]) +
+                           "; host tasks running: " + str(result["host_tasks_running"]) +
+                           "; stalled: " + str(result["queue_stalled"]))
             summary = summary[:1200]
             counts = {
                 "new_endpoints": len(result.get("endpoints", [])),

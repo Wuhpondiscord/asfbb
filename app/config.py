@@ -113,3 +113,8 @@ ZAP_ALERT_FETCH_LIMIT = 500
 DALFOX_SCAN_TIMEOUT_SECONDS = 30
 DALFOX_PAYLOADS_PER_PARAM = 30
 DALFOX_RATE_LIMIT = 2
+
+# Passive queue is shared by all targets. If the backlog is unchanged and
+# ZAP reports no active task for the current host, stop waiting and report
+# partial coverage instead of consuming the entire deadline.
+ZAP_PASSIVE_STALL_CHECKS = 6
