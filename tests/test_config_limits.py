@@ -5,6 +5,7 @@ import pytest
 def test_config_defaults_match_models():
     opts=main.PipelineOptions()
     assert opts.endpoint_limit==config.ENDPOINT_LIMIT_DEFAULT
+    assert opts.gau_mode=="balanced"
     assert opts.httpx_limit==config.HTTPX_LIMIT_DEFAULT
     assert opts.katana_depth==config.KATANA_DEPTH_DEFAULT
     assert opts.zap_endpoint_limit==config.ZAP_ENDPOINT_LIMIT_DEFAULT

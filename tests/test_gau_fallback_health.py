@@ -37,7 +37,7 @@ def test_gau_fallback_breaker_limits_repeated_timeouts():
     pipeline._gau_provider_disabled_until.clear()
     with patch.object(config,"GAU_ENABLE_WAYBACK",False),patch.object(pipeline,"execute",fake):
         for _ in range(config.GAU_FALLBACK_BREAKER_FAILURES+1):
-            asyncio.run(pipeline.gau("https://example.org/","example.org"))
+            asyncio.run(pipeline.gau("https://example.org/","example.org",mode="expanded"))
     assert seen.count("commoncrawl")==config.GAU_FALLBACK_BREAKER_FAILURES
     assert seen.count("urlscan")==config.GAU_FALLBACK_BREAKER_FAILURES
     pipeline._gau_provider_failures.clear()
@@ -53,7 +53,7 @@ def test_archive_provider_status_exposes_cooldown_and_deadline():
     pipeline._gau_provider_disabled_until.clear()
     with patch.object(config,"GAU_ENABLE_WAYBACK",False),patch.object(pipeline,"execute",fake):
         for _ in range(config.GAU_FALLBACK_BREAKER_FAILURES+1):
-            result=asyncio.run(pipeline.gau("https://example.org/","example.org"))
+            result=asyncio.run(pipeline.gau("https://example.org/","example.org",mode="expanded"))
     assert result["providers"][1]["status"]=="unavailable"
     assert "cooldown_seconds" in result["providers"][1]
     pipeline._gau_provider_failures.clear()
