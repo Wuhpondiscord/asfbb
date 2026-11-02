@@ -8,7 +8,8 @@ from urllib.parse import urlsplit
 
 import httpx
 from fastapi import FastAPI, File, Header, HTTPException, UploadFile, Depends, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
 
 from .scope import LEVELS, parse_csv, public_host, target_url, DNSResolutionFailed
@@ -32,6 +33,15 @@ ACTIVE_MODULES = ACTIVE_MODULES | WEB_MODULES
 ZAP_KEY = os.environ.get("ZAP_API_KEY", "")
 ZAP_URL = "http://127.0.0.1:8090"
 app = FastAPI(title="ASFB Scanner API", version="0.1.0", docs_url="/docs")
+@app.exception_handler(RequestValidationError)
+async def private_validation_errors(request, exc):
+    # Pydantic's default "input"/"ctx" can echo raw replay credentials or bodies.
+    return JSONResponse(status_code=422, content={"detail": [
+        {"loc": list(error["loc"]), "type": error["type"], "msg": error["msg"]}
+        for error in exc.errors()
+    ]})
+
+
 assets = {}
 accounts = {}
 jobs = {}
@@ -421,7 +431,8 @@ async def create_scan(spec: ScanRequest, request: Request):
                 and existing.get("options", {}).get("zap_wait_seconds", config.ZAP_PASSIVE_WAIT_SECONDS_DEFAULT) == spec.options.zap_wait_seconds
                 and not (spec.options.inputs.source_text or spec.options.inputs.sbom_text or spec.options.inputs.llm_path
                          or spec.options.inputs.idor_path or spec.options.inputs.idor_values
-                         or spec.options.inputs.graphql_path or spec.options.inputs.cors_path or spec.options.inputs.websocket_path)
+                         or spec.options.inputs.graphql_path or spec.options.inputs.cors_path or spec.options.inputs.websocket_path
+                         or spec.options.inputs.race is not None or spec.options.inputs.nosql is not None)
                 and existing.get("options", {}).get("inputs", {}).get("api_target", False) == spec.options.inputs.api_target):
             return {"id": existing["id"], "status": existing["status"], "reused": True}
     identifier = uuid.uuid4().hex
@@ -450,6 +461,10 @@ class BatchRequest(BaseModel):
 
 @app.post("/api/scans/batch", dependencies=[Depends(authorize)])
 async def batch_scans(payload: BatchRequest, request: Request):
+    if len(payload.asset_ids) > 1 and (
+            "race-replay" in payload.modules and payload.options.inputs.race is not None
+            or "nosql" in payload.modules and payload.options.inputs.nosql is not None):
+        raise HTTPException(422, "Replay profiles apply to one selected asset per job")
     if len(payload.asset_ids) > 1 and "idor-forge" in payload.modules and payload.options.inputs.idor_path:
         raise HTTPException(422, "Configure IDOR-Forge comparisons for one selected asset at a time")
     if len(payload.asset_ids) > 1 and (payload.options.inputs.source_text or payload.options.inputs.sbom_text):
@@ -589,7 +604,9 @@ async def run_scan_job(identifier, spec):
             if job["cancelled"]:
                 break
             async with module_slot(module, job, log_event,
-                                   enabled=module not in ('depscan', 'trivy') or bool(spec.options.inputs.sbom_text)):
+                                   enabled=(module not in ('depscan', 'trivy') or bool(spec.options.inputs.sbom_text))
+                                   and (module != "race-replay" or spec.options.inputs.race is not None)
+                                   and (module != "nosql" or spec.options.inputs.nosql is not None)):
                 unresolved = False
                 try:
                     public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
@@ -843,7 +860,7 @@ async def run_scan_job(identifier, spec):
                     diagnostics["crawl_seeds"] = result["seed_count"]
                 if job.get("waf", {}).get("vendors"):
                     diagnostics["waf_context"] = job["waf"]["vendors"]
-                if module in ("graphw00f", "corsy", "takeover", "s3-review", "websocket", "vcs-artifacts") and result.get("metadata") is not None:
+                if module in ("graphw00f", "corsy", "takeover", "s3-review", "websocket", "vcs-artifacts", "race-replay", "nosql") and result.get("metadata") is not None:
                     diagnostics["protocol_review"] = result["metadata"]
                 if result.get("passive_wait") is not None:
                     diagnostics["passive_wait"] = result["passive_wait"]

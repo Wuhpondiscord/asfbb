@@ -5,6 +5,10 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, field_validator
+try:
+    from .replay_inputs import RaceReplay, NoSQLReplay
+except ImportError:
+    from replay_inputs import RaceReplay, NoSQLReplay
 
 
 def clean_sbom(text):
@@ -39,6 +43,8 @@ def clean_sbom(text):
 
 
 class ModuleInputs(BaseModel):
+    race: RaceReplay | None = None
+    nosql: NoSQLReplay | None = None
     source_text: str = Field(default="", max_length=200000)
     sast_language: Literal["", "python", "javascript", "typescript"] = ""
     trufflehog_verify: bool = False
@@ -96,7 +102,8 @@ class ModuleInputs(BaseModel):
         return values
 
     def public_summary(self):
-        return {"graphql_configured": bool(self.graphql_path), "cors_configured": bool(self.cors_path),
+        return {"race_configured": self.race is not None, "nosql_configured": self.nosql is not None,
+                "race_state_verifier": bool(self.race and self.race.verification), "graphql_configured": bool(self.graphql_path), "cors_configured": bool(self.cors_path),
                 "websocket_configured": bool(self.websocket_path), "sast_language": self.sast_language,
                 "trufflehog_verify": self.trufflehog_verify,
                 "source_bytes": len(self.source_text.encode("utf-8")),

@@ -4,7 +4,7 @@ from urllib.parse import urlsplit
 MODULES = ("gau", "katana", "httpx", "wafw00f", "zap-passive", "nuclei", "nikto", "wpscan",
            "testssl", "wapiti", "retirejs", "amass", "kiterunner", "nettacker",
            "idor-forge", "trufflehog", "semgrep", "depscan", "trivy", "osv-scanner", "garak",
-           "ffuf", "arjun", "dalfox", "sqlmap", "graphw00f", "corsy", "takeover", "s3-review", "websocket", "vcs-artifacts")
+           "ffuf", "arjun", "dalfox", "sqlmap", "graphw00f", "corsy", "takeover", "s3-review", "websocket", "vcs-artifacts", "race-replay", "nosql")
 URL_PRODUCERS = ("gau", "katana", "ffuf", "kiterunner")
 URL_CONSUMERS = ("httpx", "zap-passive", "nuclei", "retirejs", "arjun", "dalfox", "sqlmap", "graphw00f", "websocket")
 STATIC_EXTENSIONS = (".js", ".mjs", ".css", ".json", ".map", ".svg", ".png", ".jpg",
@@ -33,7 +33,7 @@ def plan(modules, mode="manual", reuse=False):
     edges.update({("gau", "katana"), ("arjun", "dalfox"), ("arjun", "sqlmap"),
                   ("httpx", "arjun"), ("httpx", "retirejs"), ("httpx", "zap-passive"),
                   ("httpx", "nuclei")})
-    edges.update({("wafw00f", c) for c in ("ffuf", "nuclei", "nikto", "wpscan", "wapiti", "arjun", "dalfox", "sqlmap")})
+    edges.update({("wafw00f", c) for c in ("ffuf", "nuclei", "nikto", "wpscan", "wapiti", "arjun", "dalfox", "sqlmap", "race-replay", "nosql")})
     if reuse:
         edges.update({("httpx", c) for c in ("nikto", "wpscan", "wapiti", "corsy")})
     edges = {(p, c) for p, c in edges if p in requested and c in requested and p != c}

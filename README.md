@@ -5,6 +5,68 @@ sdk: docker
 app_port: 7860
 ---
 
+## Race replay and NoSQL HTTP review
+
+Configure **Settings → Replay checks**, enable the desired module and select one asset. Blank profiles skip in Full pipeline. Both modules are keyless; optional test-account headers stay private to the job. Profiles are never saved in cookies/public job options and clear after queuing.
+
+Race replay sends two sequential requests on a control fixture, then two best-effort overlapping requests on a distinct fresh fixture. Use disposable state: POST operations can have effects. Exactly one sequential success is required before the burst. An optional GET counter verifier requires fresh zero counters and exactly one control effect. A parallel counter overrun is a corroborated candidate; without verification, duplicate success responses are informational and may be idempotent acknowledgements. This is not HTTP/2 single-packet synchronization.
+
+```json
+{
+  "request": {
+    "path": "/api/test-claim",
+    "method": "POST",
+    "json_body": {
+      "ticket": "placeholder"
+    }
+  },
+  "field": "ticket",
+  "control_value": "CONTROL_TEST_FIXTURE",
+  "parallel_value": "RACE_TEST_FIXTURE",
+  "success": {
+    "pointer": "/accepted",
+    "equals": true
+  },
+  "verification": {
+    "request": {
+      "path": "/api/test-state",
+      "query": {
+        "ticket": "placeholder"
+      }
+    },
+    "field": "ticket",
+    "pointer": "/accepted_count"
+  }
+}
+```
+
+NoSQL HTTP review uses six paced controls on one top-level query/JSON string field: baseline, negative scalar, inert object, equality-positive, equality-negative and not-equal. GET uses bracket parameters; POST uses JSON objects. Operator-dependent behavior is a candidate, not proof of a database/authentication bypass: documented filter APIs can intentionally support operators. No scripts, sleeps, regex payloads, enumeration, direct database connections or credential extraction.
+
+```json
+{
+  "request": {
+    "path": "/api/test-lookup",
+    "method": "POST",
+    "json_body": {
+      "reference": "KNOWN_TEST_REFERENCE"
+    }
+  },
+  "field": "reference",
+  "success": {
+    "pointer": "/found",
+    "equals": true
+  }
+}
+```
+
+Request paths are same-origin paths without query/fragment. GET uses query; POST uses json_body. Success uses an RFC 6901 JSON pointer and an exact JSON scalar type. Raw headers, bodies, paths, fixture values, predicates and response content are redacted. Protected routing/framing headers and supplied operator-bearing baseline objects are rejected. Validation errors omit raw input/context.
+
+Verified TLS, per-attempt public-DNS checks, fresh clients, no redirects/retries and a 64 KiB uncompressed response limit apply. One shared replay slot bounds HF load; only the two-request race burst overlaps. Race uses four attempts, or eight with verification; NoSQL uses six at most. Deadlines include pacing and cap at 330 seconds. Redirects, 429, 5xx, missing matchers/counters, stale fixtures and failed controls stop the profile. Reports checkpoint partial control results without private data.
+
+API inputs: options.inputs.race and options.inputs.nosql. Configured replay jobs are not deduplicated and cannot target multiple assets. Existing cookies survive the additions; Manual order is exact and Guided mode places WAF context first. Deep network scanning is unchanged.
+
+These project profiles use the existing HTTPX runtime, following [HTTPX async](https://www.python-httpx.org/async/), [OWASP NoSQL testing](https://wstg.owasp.org/latest/4-Web_Application_Security_Testing/07-Injection/05.6-Testing_for_NoSQL_Injection/) and MongoDB [equality](https://www.mongodb.com/docs/manual/reference/operator/query/eq/)/[not-equal](https://www.mongodb.com/docs/manual/reference/operator/query/ne/) semantics. They are not the race-the-web/NoSQLMap executables. CI uses mocked transports, never live replay targets.
+
 ## Protocol and infrastructure batch
 
 Six additional keyless modules are installed. They are off by default, included by **Enable all modules**, and participate in Guided or exact Manual pipeline ordering. New cookie entries use defaults without clearing old choices. The planner now accepts up to 64 module entries before registry/duplicate validation so the old 30-entry preview ceiling does not block future additions.
