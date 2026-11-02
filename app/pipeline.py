@@ -190,14 +190,18 @@ _gau_disabled_until = 0.0
 _gau_provider_failures = {}
 _gau_provider_disabled_until = {}
 
-async def gau(url, host, limit=None):
-    """Query bounded archives with independent provider cooldown and transparent coverage."""
+async def gau(url, host, limit=None, mode=None):
+    """Query fast archives by default; slower archives are opt-in per job."""
     global _gau_failures, _gau_disabled_until
+    chosen_mode = mode or config.GAU_MODE_DEFAULT
+    if chosen_mode not in ("balanced", "expanded"):
+        raise ValueError("Invalid GAU archive mode")
     maximum = max(1, min(int(limit or config.ENDPOINT_LIMIT_DEFAULT), config.ENDPOINT_LIMIT_MAX))
-    providers = (config.GAU_PROVIDER,) + tuple(config.GAU_FALLBACK_PROVIDERS)
-    providers = tuple(p for p in providers if p != "wayback" or config.GAU_ENABLE_WAYBACK)
-    if config.GAU_ENABLE_WAYBACK and "wayback" not in providers:
-        providers += ("wayback",)
+    providers = (config.GAU_PROVIDER,) + tuple(config.GAU_FAST_PROVIDERS)
+    if chosen_mode == "expanded":
+        providers += tuple(config.GAU_SLOW_PROVIDERS)
+        if config.GAU_ENABLE_WAYBACK:
+            providers += ("wayback",)
     collected, provider_results = [], []
     for provider in dict.fromkeys(providers):
         now = time.monotonic()
@@ -211,11 +215,12 @@ async def gau(url, host, limit=None):
                 "cooldown_seconds": round(disabled_until - now)})
             continue
         deadline = (config.GAU_WAYBACK_DEADLINE_SECONDS if provider == "wayback"
+                    else config.GAU_SLOW_PROVIDER_DEADLINE_SECONDS if provider in config.GAU_SLOW_PROVIDERS
                     else config.GAU_PROVIDER_DEADLINE_SECONDS)
         args = ["/usr/local/bin/gau", "--threads", "1",
-                "--timeout", str(config.GAU_HTTP_TIMEOUT_SECONDS),
+                "--timeout", str(min(config.GAU_HTTP_TIMEOUT_SECONDS, deadline)),
                 "--retries", "0", "--providers", provider, host]
-        rows, status = await execute(args, deadline)
+        began = time.monotonic()\n        rows, status = await execute(args, deadline)
         urls = [value.strip() for value in rows
                 if isinstance(value, str) and in_host(value.strip(), host)]
         collected.extend(urls)
@@ -223,7 +228,8 @@ async def gau(url, host, limit=None):
                                  if value.startswith(("[stderr]", "[diagnostic]")))
         provider_results.append({"provider": provider, "status": status,
                                  "urls": len(urls), "reason": diagnostics[:300],
-                                 "deadline_seconds": deadline})
+                                 "deadline_seconds": deadline,
+                                 "elapsed_ms": round((time.monotonic() - began) * 1000)})
         failed = status in ("timeout", "failed", "unavailable")
         if is_primary:
             if failed:
@@ -264,13 +270,20 @@ async def gau(url, host, limit=None):
     problems = [f'{item["provider"]}: {item["status"]}' +
                 (f' ({item.get("reason")})' if item.get("reason") else "")
                 for item in provider_results if item["status"] != "completed"]
+    coverage = ("degraded" if problems and (successes or unique) else
+                "unavailable" if problems else "found" if unique else "no-archive-hits")
+    reason = " | ".join(problems)
+    if not unique:
+        reason = (reason + " | " if reason else "") + (
+            "No exact-host archive URLs were returned. This does not imply the host has no URLs.")
     return {
-        "status": final_status, "endpoints": unique, "providers": provider_results,
-        "coverage": ("full" if not problems else "degraded" if successes else "unavailable"),
-        "reason": " | ".join(problems)[:500],
-        "summary": f"Archive providers attempted: {len(provider_results)}; "
-                   f"successful: {len(successes)}; scoped URLs: {len(unique)}; "
-                   f"coverage: {'full' if not problems else 'degraded'}",
+        "status": final_status, "mode": chosen_mode, "endpoints": unique,
+        "providers": provider_results, "coverage": coverage,
+        "reason": reason[:500],
+        "summary": f"GAU mode: {chosen_mode}; archive providers queried: {len(provider_results)}; "
+                   f"responded: {len(successes)}; exact-host URLs: {len(unique)}; "
+                   f"coverage: {coverage}" +
+                   (f"; {' | '.join(problems)}" if problems else ""),
     }
 
 async def probe(urls, host, agent, limit=1):

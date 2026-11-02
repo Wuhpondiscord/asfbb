@@ -3,7 +3,7 @@ import os
 import secrets
 import time
 import uuid
-from threading import Lock
+from threading import Lock\nfrom typing import Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -468,7 +468,7 @@ async def run_scan_job(identifier, spec):
             job["pipeline"][module] = "running"
             try:
                 if module == "gau":
-                    result = await gau(url, host, spec.options.endpoint_limit)
+                    result = await gau(url, host, spec.options.endpoint_limit, spec.options.gau_mode)
                     for discovered in result["endpoints"]:
                         endpoint_sources.setdefault(discovered, []).append("gau")
                     endpoints = list(dict.fromkeys(endpoints + result["endpoints"]))[:spec.options.endpoint_limit]

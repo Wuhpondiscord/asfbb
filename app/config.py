@@ -46,10 +46,14 @@ GAU_PROVIDER = "otx"
 PROCESS_OUTPUT_MAX_LINES = 5000
 
 # GAU: fallback providers are queried when Wayback has no successful URL response.
-GAU_FALLBACK_PROVIDERS = ("commoncrawl", "urlscan")
+GAU_MODE_DEFAULT = "balanced"
+# Balanced uses fast providers only; expanded includes slower Common Crawl.
+GAU_FAST_PROVIDERS = ("urlscan",)
+GAU_SLOW_PROVIDERS = ("commoncrawl",)
+GAU_FALLBACK_PROVIDERS = ("urlscan", "commoncrawl")  # legacy constant
 # Wayback is opt-in until its availability recovers.
 GAU_ENABLE_WAYBACK = False
-GAU_PROVIDER_DEADLINE_SECONDS = 12
+GAU_PROVIDER_DEADLINE_SECONDS = 9\nGAU_SLOW_PROVIDER_DEADLINE_SECONDS = 12
 GAU_HTTP_TIMEOUT_SECONDS = 8
 GAU_AGGREGATE_ALL_PROVIDERS = False
 
