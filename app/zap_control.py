@@ -11,7 +11,16 @@ def _task_urls(response):
         tasks = tasks.get("task") or tasks.get("tasks") or []
     if not isinstance(tasks, list):
         return None
-    return [t.get("url", "") for t in tasks if isinstance(t, dict)]
+    urls = []
+    for item in tasks:
+        if not isinstance(item, dict):
+            return None
+        # ZAP's ApiResponseSet can wrap each task under "currentTasks".
+        value = item.get("currentTasks", item)
+        if not isinstance(value, dict) or not isinstance(value.get("url"), str):
+            return None
+        urls.append(value["url"])
+    return urls
 
 
 async def wait_for_passive_queue(client, zap_call, host, *, limit, interval, stall_checks):
@@ -40,9 +49,12 @@ async def wait_for_passive_queue(client, zap_call, host, *, limit, interval, sta
                 tasks = None
             if tasks is not None:
                 global_tasks = len(tasks)
-                host_tasks = sum(
-                    1 for u in tasks
-                    if isinstance(u, str) and urlsplit(u).hostname == host)
+                host_tasks = 0
+                for u in tasks:
+                    try:
+                        host_tasks += int(urlsplit(u).hostname == host)
+                    except ValueError:
+                        host_tasks += 1  # Unknown target; wait conservatively.
                 if host_tasks == 0:
                     stalled = True
                     break
