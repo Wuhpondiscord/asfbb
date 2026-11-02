@@ -365,6 +365,8 @@ class BatchRequest(BaseModel):
 
 @app.post("/api/scans/batch", dependencies=[Depends(authorize)])
 async def batch_scans(payload: BatchRequest, request: Request):
+    if len(payload.asset_ids) > 1 and "idor-forge" in payload.modules and payload.options.inputs.idor_path:
+        raise HTTPException(422, "Configure IDOR-Forge comparisons for one selected asset at a time")
     if len(payload.asset_ids) > 1 and (payload.options.inputs.source_text or payload.options.inputs.sbom_text):
         raise HTTPException(422, "Attach source/SBOM input to one selected asset per job")
     if ACTIVE_MODULES.intersection(payload.modules) and (len(payload.asset_ids) > config.ACTIVE_BATCH_LIMIT or not payload.active_confirmed):

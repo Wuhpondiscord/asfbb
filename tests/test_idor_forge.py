@@ -97,3 +97,14 @@ def test_logs_have_levels_retention_metadata_and_remain_owner_scoped():
     assert result["events"][0]["level"] == "warning"
     assert result["events"][0]["event_id"]
     assert "owner" not in result["events"][0] and "other.org" not in json.dumps(result)
+
+def test_explicit_reference_comparisons_cannot_fan_out_to_multiple_assets():
+    main.queue = asyncio.Queue()
+    main.jobs.clear()
+    with TestClient(main.app) as client:
+        response = client.post("/api/scans/batch", json={
+            "asset_ids": ["a", "b"], "policy_confirmed": True, "active_confirmed": True,
+            "modules": ["idor-forge"], "options": {"inputs": inputs().model_dump()}})
+    assert response.status_code == 422
+    assert "IDOR-Forge" in response.json()["detail"]
+    assert main.queue.empty()

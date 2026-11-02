@@ -87,6 +87,8 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
    await page.locator('#tab-'+name).click();
    if(name==='settings')await page.locator('[data-settings="pipeline"]').click();
    const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth+1);
+   if(overflow)console.error(await page.evaluate(()=>Array.from(document.querySelectorAll('body *')).filter(n=>{const r=n.getBoundingClientRect();return r.width&&r.right>window.innerWidth+1}).slice(0,30).map(n=>({tag:n.tagName,id:n.id,class:n.className,right:n.getBoundingClientRect().right,width:n.getBoundingClientRect().width}))));
+   await page.screenshot({path:'ui-review/'+name+'-'+width+'.png',fullPage:true});
    assert(!overflow,'Horizontal page overflow: '+name+' at '+width);
    await page.screenshot({path:'ui-review/'+name+'-'+width+'.png',fullPage:true});
   }
