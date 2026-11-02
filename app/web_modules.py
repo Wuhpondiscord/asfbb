@@ -206,7 +206,7 @@ async def run_web_module(module, url, host, agent, delay=1.5, discovered=None, i
     if module == "wpscan":
         target, evidence = await wordpress_preflight(url, host, agent)
         if not target:
-            return {"status": "skipped", "alerts": [], "target": url,
+            return {"status": "skipped", "source": module, "alerts": [], "target": url,
                     "reason": evidence, "output": "Skipped WPScan: " + evidence}
     public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
     deadlines = {"nikto": config.NIKTO_TIMEOUT_SECONDS, "wpscan": config.WPSCAN_TIMEOUT_SECONDS,
