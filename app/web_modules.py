@@ -62,27 +62,21 @@ class WordPressEvidence(HTMLParser):
 
 
 async def wordpress_preflight(url, host, agent):
-    """One current-page GET, no redirect following, bounded body and deadline."""
-    public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
-
-    async def inspect():
-        async with httpx.AsyncClient(timeout=8, follow_redirects=False, trust_env=False) as client:
-            async with client.stream("GET", url, headers={"User-Agent": agent}) as response:
-                if response.status_code != 200:
-                    return None, f"WordPress unconfirmed: preflight HTTP {response.status_code}; redirects are not followed"
-                data = bytearray()
-                async for chunk in response.aiter_bytes(chunk_size=16384):
-                    data.extend(chunk[:config.WEB_PREFLIGHT_MAX_BYTES - len(data)])
-                    if len(data) >= config.WEB_PREFLIGHT_MAX_BYTES:
-                        break
-                parser = WordPressEvidence(url)
-                parser.feed(bytes(data).decode("utf-8", "replace"))
-                return parser.install_url, "; ".join(dict.fromkeys(parser.evidence))
+    """A current-page sample with bounded, same-origin-only redirects."""
+    from .sampling import FetchProblem, fetch_page
     try:
-        target, evidence = await asyncio.wait_for(inspect(), 10)
-        return target, evidence or "WordPress unconfirmed: no current-page WordPress evidence"
-    except (httpx.HTTPError, asyncio.TimeoutError) as exc:
-        return None, "WordPress unconfirmed: preflight " + exc.__class__.__name__
+        body, content_type, sampled_url = await fetch_page(
+            url, agent, config.WEB_PREFLIGHT_MAX_BYTES, public_host,
+            timeout=10, request_timeout=8, truncate=True)
+        parser = WordPressEvidence(sampled_url)
+        parser.feed(body.decode("utf-8", "replace"))
+        evidence = "; ".join(dict.fromkeys(parser.evidence))
+        if evidence and sampled_url != url:
+            evidence += "; same-origin redirected page sampled"
+        return parser.install_url, evidence or "WordPress unconfirmed: no current-page WordPress evidence"
+    except (FetchProblem, httpx.HTTPError, asyncio.TimeoutError, ValueError) as exc:
+        detail = str(exc) if isinstance(exc, FetchProblem) else exc.__class__.__name__
+        return None, "WordPress unconfirmed: preflight " + detail
 
 
 def read_report(path):
@@ -206,7 +200,7 @@ async def run_web_module(module, url, host, agent, delay=1.5, discovered=None, i
         return await client_modules.wapiti(url, host, agent, delay)
     target, evidence = url, ""
     if module == "testssl" and urlsplit(url).scheme != "https":
-        return {"status": "skipped", "alerts": [], "target": url,
+        return {"status": "skipped", "source": module, "alerts": [], "target": url,
                 "reason": "Not applicable: TLS review requires an HTTPS target",
                 "output": "Skipped testssl.sh: HTTP target"}
     if module == "wpscan":

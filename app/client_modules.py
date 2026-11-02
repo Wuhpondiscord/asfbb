@@ -15,27 +15,11 @@ from .scope import public_host
 from .web_modules import same_origin, read_report, alert
 
 
-class FetchProblem(ValueError):
-    pass
+from .sampling import FetchProblem, fetch_page
 
 
 async def fetch_sample(url, agent, maximum):
-    """Read a bounded current response on HF; never follow redirects."""
-    import os
-    public_host(urlsplit(url).hostname, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
-
-    async def fetch():
-        async with httpx.AsyncClient(timeout=5, follow_redirects=False, trust_env=False) as client:
-            async with client.stream("GET", url, headers={"User-Agent": agent}) as response:
-                if response.status_code != 200:
-                    raise FetchProblem("HTTP " + str(response.status_code))
-                data = bytearray()
-                async for chunk in response.aiter_bytes(chunk_size=16384):
-                    if len(data) + len(chunk) > maximum:
-                        raise FetchProblem("response exceeds sample byte limit")
-                    data.extend(chunk)
-                return bytes(data), str(response.headers.get("content-type", "")).lower()
-    return await asyncio.wait_for(fetch(), 8)
+    return await fetch_page(url, agent, maximum, public_host)
 
 
 class ScriptInventory(HTMLParser):
@@ -110,11 +94,12 @@ async def retirejs(url, host, agent, delay, discovered):
     reasons, samples = [], []
     parser = ScriptInventory(url)
     try:
-        body, content_type = await fetch_sample(url, agent, config.WEB_PREFLIGHT_MAX_BYTES)
+        body, content_type, page_url = await fetch_sample(url, agent, config.WEB_PREFLIGHT_MAX_BYTES)
+        parser = ScriptInventory(page_url)
         if "html" in content_type or body.lstrip().lower().startswith((b"<!doctype html", b"<html")):
             parser.feed(body.decode("utf-8", "replace"))
         elif "javascript" in content_type or urlsplit(url).path.lower().endswith(".js"):
-            samples.append((url, body))
+            samples.append((page_url, body))
     except (FetchProblem, httpx.HTTPError, asyncio.TimeoutError, ValueError) as exc:
         reasons.append("Page sampling: " + (str(exc) if isinstance(exc, FetchProblem) else exc.__class__.__name__))
     candidates = list(dict.fromkeys(parser.urls + [
@@ -127,17 +112,17 @@ async def retirejs(url, host, agent, delay, discovered):
     for candidate in selected:
         await asyncio.sleep(max(config.REQUEST_DELAY_MIN, float(delay)))
         try:
-            body, content_type = await fetch_sample(candidate, agent, config.RETIRE_MAX_FILE_BYTES)
+            body, content_type, sampled_url = await fetch_sample(candidate, agent, config.RETIRE_MAX_FILE_BYTES)
             if "html" in content_type or body.lstrip().lower().startswith((b"<!doctype html", b"<html")):
                 raise FetchProblem("HTML returned instead of JavaScript")
             if "javascript" not in content_type and not urlsplit(candidate).path.lower().endswith((".js", ".mjs")):
                 raise FetchProblem("Response not identified as JavaScript")
             if body:
-                samples.append((candidate, body))
+                samples.append((sampled_url, body))
         except (FetchProblem, httpx.HTTPError, asyncio.TimeoutError, ValueError) as exc:
             reasons.append("Script sampling: " + (str(exc) if isinstance(exc, FetchProblem) else exc.__class__.__name__))
     inline_limit = max(0, limit - len(samples))
-    samples.extend((url, body) for body in parser.inline[:inline_limit])
+    samples.extend((parser.target, body) for body in parser.inline[:inline_limit])
     if len(parser.inline) > inline_limit:
         reasons.append("Inline JavaScript sample limited")
     if not samples:

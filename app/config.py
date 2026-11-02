@@ -141,3 +141,6 @@ RETIRE_TIMEOUT_SECONDS = 20
 WAPITI_REQUEST_LIMIT = 12
 WAPITI_SCAN_SECONDS = 25
 WAPITI_TIMEOUT_SECONDS = 40
+
+# Anonymous page/script samplers may follow two exact-origin redirects only.
+SAMPLE_MAX_REDIRECTS = 2

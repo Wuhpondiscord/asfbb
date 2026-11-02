@@ -20,7 +20,7 @@ def test_script_inventory_keeps_same_origin_and_javascript_inline_only():
 
 
 def test_retire_no_javascript_skips_without_starting_node():
-    async def fetch(*args): return b"<html>No scripts</html>", "text/html"
+    async def fetch(*args): return b"<html>No scripts</html>", "text/html", "https://example.org/"
     with patch.object(tools, "fetch_sample", fetch), patch.object(tools, "execute") as execute:
         result = asyncio.run(tools.retirejs("https://example.org/", "example.org", "Test", 1.5, []))
     assert result["status"] == "skipped"
@@ -42,8 +42,8 @@ def test_retire_samples_bounded_files_uses_bundled_database_and_maps_findings():
         fetches.append(url)
         if url == "https://example.org/":
             scripts = "".join(f'<script src="/jquery-{i}.js"></script>' for i in range(8))
-            return scripts.encode(), "text/html"
-        return b"/* sample */", "application/javascript"
+            return scripts.encode(), "text/html", url
+        return b"/* sample */", "application/javascript", url
     async def execute(args, timeout):
         assert "--includeOsv" not in args
         assert args[args.index("--jsrepo") + 1] == "/opt/retire-db/jsrepository-v5.json"

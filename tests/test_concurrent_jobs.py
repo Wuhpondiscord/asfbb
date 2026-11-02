@@ -307,3 +307,24 @@ def test_inapplicable_database_modules_do_not_wait_for_a_cache_slot():
         finally:
             lock.release()
     asyncio.run(exercise())
+
+def test_idle_dispatcher_keeps_the_first_target_at_the_front_of_a_batch():
+    async def exercise():
+        h = Harness([3, 3, 3, 3])
+        submitted = [h.queue.get_nowait() for _ in range(h.queue.qsize())]
+        for _ in submitted:
+            h.queue.task_done()
+        h.start()
+        # The real worker is idle before the HTTP batch enqueues all its items.
+        await asyncio.sleep(0)
+        for item in submitted:
+            h.queue.put_nowait(item)
+        try:
+            first = [await h.next() for _ in range(3)]
+            assert first == ["0", "1", "2"]
+            assert h.jobs["3"]["status"] == "queued"
+            h.release["0"].set()
+            assert await h.next() == "3"
+        finally:
+            await h.stop()
+    asyncio.run(exercise())

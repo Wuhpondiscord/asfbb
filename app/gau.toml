@@ -1,0 +1,20 @@
+# Public, keyless archive providers. Runtime arguments select one provider per process.
+threads = 1
+verbose = false
+retries = 0
+subdomains = false
+parameters = false
+providers = ["otx", "urlscan"]
+blacklist = ["ttf", "woff", "svg", "png", "jpg"]
+json = false
+
+[urlscan]
+apikey = ""
+
+[filters]
+from = ""
+to = ""
+matchstatuscodes = []
+matchmimetypes = []
+filterstatuscodes = []
+filtermimetypes = ["image/png", "image/jpg", "image/svg+xml"]

@@ -33,10 +33,14 @@ def command(module, url, host):
     if module == "sqlmap":
         if not urlsplit(url).query:
             raise ValueError("SQLmap review requires a parameterized URL")
-        return ["python3", "/opt/sqlmap/sqlmap.py", "-u", url,
+        names = [name for name, _ in parse_qsl(urlsplit(url).query, keep_blank_values=True)
+                 if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.$-]{0,79}", name)]
+        if not names:
+            raise ValueError("SQLmap review requires a supported GET parameter")
+        return ["python3", "/opt/sqlmap/sqlmap.py", "-u", url, "-p", names[0],
                 "--batch", "--level=1", "--risk=1", "--threads=1",
                 "--timeout=5", "--retries=0", "--technique=B",
-                "--smart", "--disable-coloring"]
+                "--smart", "--disable-coloring", "--ignore-redirects", "--delay=1"]
     raise ValueError("Unsupported review module")
 
 def ffuf_discoveries(lines, host):
@@ -144,6 +148,74 @@ def choose_dalfox_target(primary, parameters, host):
     return candidates[0] if candidates else primary
 
 
+def same_review_origin(candidate, primary, host):
+    if not isinstance(candidate, str):
+        return False
+    try:
+        a, b = urlsplit(candidate), urlsplit(primary)
+        return (in_host(candidate, host) and a.scheme == b.scheme and
+                (a.port or (443 if a.scheme == "https" else 80)) ==
+                (b.port or (443 if b.scheme == "https" else 80)))
+    except (TypeError, ValueError):
+        return False
+
+
+def choose_sqlmap_target(primary, discovered, parameters, host):
+    """Use one observed same-origin GET query/parameter, retaining known values."""
+    for candidate in [primary] + list(discovered or []):
+        if not isinstance(candidate, str) or not same_review_origin(candidate, primary, host):
+            continue
+        parts = urlsplit(candidate)
+        if any(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.$-]{0,79}", name)
+               for name, _ in parse_qsl(parts.query, keep_blank_values=True)):
+            return parts._replace(fragment="").geturl()
+    eligible = [item for item in parameters or [] if isinstance(item, dict) and
+                same_review_origin(item.get("url"), primary, host)]
+    return choose_dalfox_target(primary, eligible, host)
+
+
+def dalfox_coverage(meta):
+    """Keep compact coverage counters/status codes; omit raw requests and errors."""
+    result = {}
+    if isinstance(meta.get("incomplete"), bool):
+        result["incomplete"] = meta["incomplete"]
+    for key in ("total_requests", "failed_requests", "scan_duration_ms", "findings_count",
+                "targets_unparsable"):
+        value = meta.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            result[key] = value
+    targets = []
+    for item in meta.get("target_summary", []) if isinstance(meta.get("target_summary"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        target = {}
+        status, code = item.get("status"), item.get("error_code")
+        if status in ("completed", "incomplete", "error", "cancelled", "skipped", "failed"):
+            target["status"] = status
+        if isinstance(code, (int, str)) and re.fullmatch(r"[A-Za-z0-9_-]{1,80}", str(code)):
+            target["error_code"] = code
+        if target:
+            targets.append(target)
+    if targets:
+        result["target_summary"] = targets[:10]
+    return result
+
+
+def dalfox_incomplete_reason(meta):
+    parts = ["Dalfox reports incomplete results"]
+    if "total_requests" in meta:
+        parts.append("requests=" + str(meta["total_requests"]))
+    if "failed_requests" in meta:
+        parts.append("failed requests=" + str(meta["failed_requests"]))
+    statuses = [str(item.get("error_code") or item.get("status"))
+                for item in meta.get("target_summary", [])]
+    if statuses:
+        parts.append("target status=" + ",".join(dict.fromkeys(statuses)))
+    if len(parts) == 1:
+        parts.append("tool report did not include a specific cause")
+    return "; ".join(parts)
+
+
 def read_dalfox_report(path, host, default_url):
     """Parse Dalfox v3 JSON output and discard out-of-scope finding URLs."""
     try:
@@ -152,7 +224,7 @@ def read_dalfox_report(path, host, default_url):
         return [], {}
     if not isinstance(report, dict):
         return [], {}
-    meta = report.get("meta") if isinstance(report.get("meta"), dict) else {}
+    meta = dalfox_coverage(report.get("meta") if isinstance(report.get("meta"), dict) else {})
     findings = []
     for item in report.get("findings", []):
         if not isinstance(item, dict):
@@ -190,6 +262,10 @@ async def review(module, url, host):
             path = str(Path(tmp) / "findings.json")
             lines, status = await execute(args + ["-o", path], config.DALFOX_TIMEOUT_SECONDS)
             dalfox_findings, dalfox_meta = read_dalfox_report(path, host, url)
+    elif module == "sqlmap":
+        with tempfile.TemporaryDirectory(prefix="asfb-sqlmap-") as tmp:
+            lines, status = await execute(args + ["--output-dir", tmp, "--flush-session"],
+                                          config.PROCESS_TIMEOUT_SECONDS)
     else:
         lines, status = await execute(args, config.PROCESS_TIMEOUT_SECONDS)
     has_evidence = module == "dalfox" and any("[POC]" in line for line in lines)
@@ -197,7 +273,7 @@ async def review(module, url, host):
                       if line.startswith("[diagnostic] Process exit code:")
                       and line.rsplit(":", 1)[1].strip().isdigit()), None)
     if module == "dalfox":
-        if dalfox_meta.get("incomplete"):
+        if dalfox_meta.get("incomplete") and status not in ("timeout", "unavailable"):
             status = "partial"
         elif exit_code == 1 or (dalfox_findings and status == "completed"):
             status = "findings"
@@ -220,7 +296,9 @@ async def review(module, url, host):
     else:
         output = summarize_review(module, displayed_lines)
     if module == "dalfox" and dalfox_meta.get("incomplete"):
-        reason = ("Dalfox reports incomplete results; " + reason).strip()[:500]
+        reason = (dalfox_incomplete_reason(dalfox_meta) + ("; " + reason if reason else ""))[:500]
+        if not output:
+            output = reason
     if module == "dalfox" and status == "completed" and not urlsplit(url).query:
         # This is a deliberate coverage tradeoff: DOM AST runs, dictionary
         # mining doesn't. Don't imply an exhaustive reflected-XSS assessment.

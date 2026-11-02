@@ -238,7 +238,7 @@ async def gau(url, host, limit=None, mode=None):
         deadline = (config.GAU_WAYBACK_DEADLINE_SECONDS if provider == "wayback"
                     else config.GAU_SLOW_PROVIDER_DEADLINE_SECONDS if provider in config.GAU_SLOW_PROVIDERS
                     else config.GAU_PROVIDER_DEADLINE_SECONDS)
-        args = ["/usr/local/bin/gau", "--threads", "1",
+        args = ["/usr/local/bin/gau", "--config", "/app/app/gau.toml", "--threads", "1",
                 "--timeout", str(min(config.GAU_HTTP_TIMEOUT_SECONDS, deadline)),
                 "--retries", "0", "--providers", provider, host]
         began = time.monotonic()

@@ -68,6 +68,7 @@ def blocked_reason(job, spec, running):
 
 async def dispatch(work_queue, jobs, active_tasks, run_job, record):
     running = {}
+    pending = None
     try:
         while True:
             for identifier, item in list(running.items()):
@@ -88,8 +89,12 @@ async def dispatch(work_queue, jobs, active_tasks, run_job, record):
                     work_queue.task_done()
             # Inspect the bounded queue so one busy hostname does not block
             # unrelated hosts. Requeue with balanced unfinished-task accounting.
-            for _ in range(work_queue.qsize()):
-                identifier, spec = work_queue.get_nowait()
+            for _ in range(work_queue.qsize() + (pending is not None)):
+                if pending is not None:
+                    identifier, spec = pending
+                    pending = None
+                else:
+                    identifier, spec = work_queue.get_nowait()
                 job = jobs.get(identifier)
                 if not job or job.get("cancelled") or job.get("status") != "queued":
                     work_queue.task_done()
@@ -112,11 +117,10 @@ async def dispatch(work_queue, jobs, active_tasks, run_job, record):
                 await asyncio.wait([item["task"] for item in running.values()],
                                    timeout=0.2, return_when=asyncio.FIRST_COMPLETED)
             else:
-                # Sleep without polling while empty; put the item back for the
-                # same admission checks on the next iteration.
-                item = await work_queue.get()
-                work_queue.put_nowait(item)
-                work_queue.task_done()
+                # Keep the first item at the front when waking from idle.
+                # Requeueing it here rotates the first submitted target behind
+                # the rest of a batch before admission checks even run.
+                pending = await work_queue.get()
     finally:
         tasks = [item["task"] for item in running.values()]
         for task in tasks:

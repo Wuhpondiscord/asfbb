@@ -15,7 +15,7 @@ from .scope import LEVELS, parse_csv, public_host, target_url
 from . import storage
 from .jwtcheck import inspect_jwt
 from .pipeline import katana, nuclei, gau, probe, in_host
-from .review import ACTIVE_MODULES, review, choose_arjun_target, choose_dalfox_target
+from .review import ACTIVE_MODULES, review, choose_arjun_target, choose_dalfox_target, choose_sqlmap_target
 from . import config
 from .concurrency import dispatch, module_slot
 from .module_inputs import ModuleInputs
@@ -644,7 +644,9 @@ async def run_scan_job(identifier, spec):
                         review_url = (choose_arjun_target(url, endpoints, host)
                                       if module == "arjun" else
                                       choose_dalfox_target(url, job.get("parameters", []), host)
-                                      if module == "dalfox" else url)
+                                      if module == "dalfox" else
+                                      choose_sqlmap_target(url, endpoints, job.get("parameters", []), host)
+                                      if module == "sqlmap" else url)
                         result = await review(module, review_url, host)
                         job["reviews"].append(result)
                         if module == "dalfox":
@@ -675,8 +677,7 @@ async def run_scan_job(identifier, spec):
                                " endpoints; " + str(len(result.get("probes", []))) +
                                " probes; " + str(len(result.get("alerts", []))) + " module alerts")
                 if module == "gau":
-                    summary = str(result.get("summary") or summary) + (
-                        "; " + str(result.get("reason")) if result.get("reason") else "")
+                    summary = str(result.get("summary") or summary)
                 if module == "nuclei":
                     summary = ("Nuclei templates: " +
                                ", ".join(result.get("templates", ["unknown"])) +
@@ -713,6 +714,12 @@ async def run_scan_job(identifier, spec):
                 if module == "gau":
                     diagnostics = {"coverage": result.get("coverage"), "mode": result.get("mode"),
                                    "providers": result.get("providers", [])}
+                if module == "dalfox":
+                    diagnostics["coverage"] = result.get("metadata", {})
+                if result.get("deadline_seconds") is not None:
+                    diagnostics["deadline_seconds"] = result["deadline_seconds"]
+                if result.get("target") and module in ("dalfox", "arjun", "sqlmap"):
+                    diagnostics["review_target"] = result["target"]
                 if result.get("exit_code") is not None:
                     diagnostics["exit_code"] = result["exit_code"]
                 if result.get("requests") is not None:

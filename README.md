@@ -9,6 +9,14 @@ app_port: 7860
 
 The queue defaults to one running target per browser session. Select 2 or 3 concurrent targets under Scope & scanning or Settings → Pipeline & modules for new jobs. The Space has a global cap of three jobs; existing jobs keep their queued limit. Jobs from the same session respect the smallest limit among active jobs. Distinct hostnames can overlap, while endpoints on the same hostname are serialized across sessions so per-host module request rates are not multiplied. Each target’s modules remain ordered so discovery results are available to later stages.
 
+The idle dispatcher preserves the first queued target instead of rotating it behind a newly submitted batch. A busy hostname can still be bypassed to start an unrelated host within the configured cap.
+
+WPScan preflight and Retire.js page/script sampling permit up to two redirects on the exact same origin, with public-DNS revalidation on every hop, request pacing, byte caps and one deadline per sample. A different hostname, scheme, port or credential-bearing URL remains blocked, even if a redirect looks like a canonical www alias. Relative script paths resolve against the final sampled page.
+
+When SQLmap is enabled and active testing is confirmed, it can reuse one already observed same-origin GET query or an Arjun-discovered GET parameter. Known query values are retained; a discovered parameter without a known value uses the existing research marker. No parameter names are invented. The profile tests one parameter with level/risk 1, boolean checks, one thread, a delay and process deadline; redirects are disabled and session/output files use a disposable per-job directory.
+
+Dalfox incomplete reports retain their request counters and target status/error codes in log diagnostics; raw request/response bodies and raw target error messages are excluded. A process timeout remains a timeout. GAU uses an explicit keyless config and reports provider problems once in its summary. Amass retains its 65-second budget; provider timeouts remain degraded coverage, not a clean result.
+
 Concurrency uses one async dispatcher and the existing separate scanner subprocesses, not extra API-server workers. ZAP’s daemon is gated across its entire reset/fetch/wait/alert-collection stage, with fresh daemon history per job. Dependency-cache stages are serialized to prevent overlapping database writes. Cancellation interrupts only the selected jobs and their process groups; shutdown waits for running jobs to stop. Queue and resource waits appear in logs and job details. Module deadlines and per-target limits are unchanged. Speedup depends on network delays, available HF resources and shared-stage waits.
 
 Development for this deployment is remote-only. Changes are made with connected GitHub tools; GitHub-hosted Actions runs the checks and pushes a passing main branch to the HF Space. Do not follow older local setup/test examples on the owner's device.

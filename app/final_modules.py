@@ -264,5 +264,6 @@ async def run(module, url, host, agent, delay, inputs=None):
         diag = diagnostics(rows) if status not in ("completed", "findings") else ""
         return {"source": module, "target": url, "status": status, "alerts": findings,
                 "hosts": hosts, "endpoints": endpoints, "probes": probes,
+                "deadline_seconds": deadline,
                 "reason": (reason + ("; " + diag if diag else ""))[:700],
                 "output": f"{module}: {len(findings)} unverified findings; {len(hosts)} inventory hosts; {len(endpoints)} observed routes; status: {status}"}
