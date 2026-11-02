@@ -22,7 +22,7 @@ jobs:
           ZAP_API_KEY: test-key
         run: python3 -m pytest -q tests/
       - name: Validate Python backend syntax
-        run: python3 -m py_compile app/target_import.py app/planning.py app/coverage.py app/sampling.py app/concurrency.py app/idor_module.py app/idor_runner.py app/main.py app/pipeline.py app/web_modules.py app/client_modules.py app/wapiti_guard.py app/wapiti_runner.py app/config.py app/module_inputs.py app/final_modules.py app/final_module_names.py app/nettacker_runner.py app/garak_runner.py app/template_builder.py app/review.py app/zap_control.py app/scope.py app/jwtcheck.py app/storage.py
+        run: python3 -m py_compile app/analysis_modules.py app/waf_runner.py app/target_import.py app/planning.py app/coverage.py app/sampling.py app/concurrency.py app/idor_module.py app/idor_runner.py app/main.py app/pipeline.py app/web_modules.py app/client_modules.py app/wapiti_guard.py app/wapiti_runner.py app/config.py app/module_inputs.py app/final_modules.py app/final_module_names.py app/nettacker_runner.py app/garak_runner.py app/template_builder.py app/review.py app/zap_control.py app/scope.py app/jwtcheck.py app/storage.py
       - name: Validate dashboard JavaScript syntax
         run: |
           python3 - <<'PY'
@@ -145,6 +145,12 @@ jobs:
             /opt/asfb-venv/bin/python -c "from app import config; import pathlib; assert all(pathlib.Path(p).is_file() for p in config.NUCLEI_TEMPLATE_PATHS)"
             /opt/asfb-venv/bin/python -c "from app import config; assert config.ARJUN_WORDLIST in (\"small\", \"medium\", \"large\")"
             /opt/asfb-venv/bin/python -c "import pathlib; assert pathlib.Path(\"/opt/sqlmap/sqlmap.py\").is_file()"
+          '
+      - name: Verify new analysis engines without network access
+        run: |
+          docker run --rm --network none -v "$PWD/tests:/app/tests:ro" --entrypoint /bin/sh asfb-ci -ec '
+            /opt/wafw00f/bin/python /app/tests/analysis_offline_smoke.py wafw00f
+            /opt/asfb-venv/bin/python /app/tests/analysis_offline_smoke.py semgrep
           '
       - name: Validate Hugging Face token
         env:

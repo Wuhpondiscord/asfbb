@@ -91,7 +91,7 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
  await page.locator('#modIdorForge').check();
  await page.locator('#moduleSearch').fill('');
  await page.locator('button[onclick="enableFullPipeline()"]').click();
- assert.equal(await page.locator('.module-card input:checked').count(),23);
+ assert.equal(await page.locator('.module-card input:checked').count(),25);
  assert.equal(await page.locator('#pipelineMode').inputValue(),'guided');
  assert.equal(await page.locator('#coverageProfile').inputValue(),'balanced');
  await page.locator('#pipelineMode').selectOption('manual');
@@ -189,6 +189,7 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
  const customOrder=await page.evaluate(()=>el('settingsOrder').defaultValue.split(',').map(s=>s.trim()).reverse().join(', '));
  await page.locator('#settingsOrder').fill(customOrder);
  await page.locator('[data-settings="inputs"]').click();
+ await page.locator('#moduleSastLanguage').selectOption('typescript');
  await page.locator('#moduleSource').fill('fixture-private-source');
  await page.locator('#moduleSbom').fill('fixture-private-sbom');
  await page.locator('#moduleTrufflehogVerify').check();
@@ -212,6 +213,7 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
  await page.reload();
  await page.waitForFunction(()=>document.querySelector('#nucleiBuiltins').dataset.initialized==='true');
  assert.equal(await page.locator('#settingsZapWait').inputValue(),'240');
+ assert.equal(await page.locator('#moduleSastLanguage').inputValue(),'typescript');
  assert.equal(await page.locator('#settingsLimit').inputValue(),'225');
  assert.equal(await page.locator('#coverageProfile').inputValue(),'thorough');
  assert.equal(await page.locator('#pipelineMode').inputValue(),'manual');
@@ -229,8 +231,8 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
   assert(!(await page.locator('#'+id).isChecked()));
  // A new release adds a setting and builtin: existing saved choices survive.
  html=html.replace('id="settingsHttpx" type="number" value="10"','id="settingsHttpx" type="number" value="12"');
- html=html.replace('const names={"gau":','const names={"future":"modFuture","gau":')
-  .replaceAll('gau, katana, httpx, zap-passive','gau, katana, httpx, future, zap-passive')
+ html=html.replace('const names={"wafw00f":','const names={"future":"modFuture","wafw00f":')
+  .replaceAll('gau, katana, httpx, wafw00f','gau, katana, httpx, future, wafw00f')
   .replace('<p id="moduleSearchEmpty"','<label class="module-card" data-module-search="future"><input id="modFuture" type="checkbox"/><span>Future module</span></label><p id="moduleSearchEmpty"');
  builtinInfo={templates:[{id:'technology-headers'},{id:'future-default'}],default_ids:['technology-headers','future-default']};
  await page.reload();

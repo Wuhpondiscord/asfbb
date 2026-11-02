@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 from . import config
 
 _loop_resources = weakref.WeakKeyDictionary()
-MODULE_RESOURCES = {"zap-passive": "zap-daemon", "depscan": "dependency-cache",
+MODULE_RESOURCES = {"semgrep": "source-analysis", "zap-passive": "zap-daemon", "depscan": "dependency-cache",
                     "trivy": "dependency-cache"}
 
 

@@ -1,6 +1,7 @@
 """In-memory per-job artifact and endpoint inputs; never execute supplied content."""
 import json
 import re
+from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, field_validator
@@ -39,6 +40,7 @@ def clean_sbom(text):
 
 class ModuleInputs(BaseModel):
     source_text: str = Field(default="", max_length=200000)
+    sast_language: Literal["", "python", "javascript", "typescript"] = ""
     trufflehog_verify: bool = False
     sbom_text: str = Field(default="", max_length=1000000)
     api_target: bool = False
@@ -91,7 +93,8 @@ class ModuleInputs(BaseModel):
         return values
 
     def public_summary(self):
-        return {"trufflehog_verify": self.trufflehog_verify,
+        return {"sast_language": self.sast_language,
+                "trufflehog_verify": self.trufflehog_verify,
                 "source_bytes": len(self.source_text.encode("utf-8")),
                 "sbom_components": len(json.loads(self.sbom_text)["components"]) if self.sbom_text else 0,
                 "api_target": self.api_target, "llm_path": self.llm_path,

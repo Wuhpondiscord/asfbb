@@ -722,6 +722,8 @@ async def run_scan_job(identifier, spec):
                         result = await run_web_module(
                             module, module_url, host, spec.user_agent, spec.delay_seconds,
                             endpoints, spec.options.inputs, **profile_kwargs)
+                        if module == "wafw00f":
+                            job["waf"] = result.get("waf") or {"vendors": [], "requests": 0}
                         job["reviews"].append(result)
                         job["alerts"].extend(result.get("alerts", []))
                         job["probes"].extend(result.get("probes", []))
@@ -820,6 +822,8 @@ async def run_scan_job(identifier, spec):
                     diagnostics["coverage_budget" if module == "dalfox" else "coverage"] = result["coverage"]
                 if result.get("seed_count") is not None:
                     diagnostics["crawl_seeds"] = result["seed_count"]
+                if job.get("waf", {}).get("vendors"):
+                    diagnostics["waf_context"] = job["waf"]["vendors"]
                 if result.get("passive_wait") is not None:
                     diagnostics["passive_wait"] = result["passive_wait"]
                 if result.get("verification") is not None:

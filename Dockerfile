@@ -36,6 +36,10 @@ RUN python -m venv --copies /opt/nettacker && /opt/nettacker/bin/pip install --n
 # no local model backends or GPU frameworks are used in the HF integration.
 RUN python -m venv --copies /opt/garak && /opt/garak/bin/pip install --no-cache-dir --no-deps garak==0.17.1 && /opt/garak/bin/pip install --no-cache-dir requests backoff jsonpath-ng PyYAML xdg-base-dirs colorama tqdm
 
+FROM python:3.12-slim-bookworm AS analysis-tools
+RUN python -m venv --copies /opt/wafw00f && /opt/wafw00f/bin/pip install --no-cache-dir wafw00f==2.4.2
+RUN python -m venv --copies /opt/semgrep && /opt/semgrep/bin/pip install --no-cache-dir semgrep==1.183.0
+
 FROM python:3.12-slim-bookworm AS idor-tools
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
 # Pin the upstream core and retain its MIT license. No GUI or upstream CLI.
@@ -44,6 +48,8 @@ RUN python -m venv --copies /opt/idor-forge-venv && /opt/idor-forge-venv/bin/pip
 
 FROM zaproxy/zap-stable
 USER root
+COPY --from=analysis-tools /opt/wafw00f /opt/wafw00f
+COPY --from=analysis-tools /opt/semgrep /opt/semgrep
 COPY --from=wp-tools /usr/local/ /usr/local/
 COPY --from=idor-tools /opt/idor-forge /opt/idor-forge
 COPY --from=idor-tools /opt/idor-forge-venv /opt/idor-forge-venv

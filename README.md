@@ -5,6 +5,25 @@ sdk: docker
 app_port: 7860
 ---
 
+## New keyless analysis modules: WAFW00F and Semgrep
+
+This batch adds two complementary modules from the scanner review:
+
+- **WAFW00F 2.4.2:** native vendor-signature identification on the selected URL. Guided ordering places it before FFUF, Nuclei and the applicable web reviews. Detected vendors are infrastructure inventory, recorded on the job and in later stage diagnostics. They are informational observations, not vulnerabilities, and signatures can be hidden or spoofed. This profile does not change payload encoding, inject bypass headers or automatically expand scope.
+- **Semgrep CE 1.183.0:** static analysis of one supplied Python, JavaScript or TypeScript file. Paste source in Settings → Module inputs and select its language. A URL, SBOM or empty source is not treated as source code. Nine bundled review rules cover Python shell=True, dynamic evaluation, pickle, unsafe YAML loaders and disabled TLS verification, plus JS/TS eval, Function construction, shell execution and dynamic innerHTML assignments. Results require human review of trust and reachability; this is not whole-repository or cross-file analysis.
+
+Both module toggles are off by default. Enable them individually or through Full pipeline. Semgrep skips without source and an explicit supported language, including in Full pipeline. The language preference is stored in a new cookie namespace; pasted source stays unsaved. Existing module choices and pipeline orders are retained; new stages are appended on preference restoration. Manual pipelines preserve the user's exact selected order.
+
+WAF requests use a dedicated transport: same origin, public-DNS revalidation per request, TLS verification, no redirects, no supplied account cookies, one worker, at most eight GETs, at least the chosen request delay, a 256 KiB response sample and a 45-second process cap. A 429 stops this profile without retries. Native vendor identification uses baseline and a bounded central signature probe; the SQL sleep component is replaced with a non-time-based signature. Generic blocking heuristics and OS command/XXE probes are outside this profile. Budget or response-size limits report partial coverage. Raw responses, headers and trigger URLs are omitted from saved reports.
+
+Semgrep uses only the bundled rule file with metrics and version checks disabled, the CE engine, one worker, a 5-second per-rule timeout, a 512 MB engine budget and a 75-second process deadline. It never runs supplied code, project builds, autofixes, remote rule registries or uploads. An exclusive source-analysis slot bounds simultaneous native scans on HF. Findings contain fixed rule messages and line numbers; source snippets, metavariables, native diagnostics and raw file paths are redacted. Errors, skipped files and deadlines do not become clean scans.
+
+Upstream behavior was checked against the [WAFW00F source/docs](https://github.com/EnableSecurity/wafw00f/tree/v2.4.2) and [Semgrep CLI reference](https://docs.semgrep.dev/cli-reference). The container installs pinned native versions during remote builds. CI tests the installed engines with a mocked WAF response and Python/JS/TS source fixtures inside a container with networking disabled.
+
+### Follow-up priorities from the scanner review
+
+GraphQL endpoint-aware checks, dedicated CORS analysis and scoped takeover fingerprinting are the next most useful web additions. They should consume discovered endpoints and require explicit applicable targets rather than run blindly on every asset. Cloud posture tools need explicit cloud scope/identities; broad bucket enumeration should not infer authorization from a web hostname. Raw Nmap/RustScan, default-login probing, race replay and WebSocket fuzzing need separate network/protocol and replay controls before they fit this HF pipeline. Exposed .git reconstruction downloads source/history and needs a separate explicit artifact workflow; another secret detector overlaps the existing TruffleHog more than SAST does.
+
 ## Passive ZAP completion and saved browser preferences
 
 ZAP passive rules run asynchronously after proxied responses arrive. The old 30 × 0.75-second polling window could stop after about 22.5 seconds while a large response was still being processed. The default passive wait budget is now **120 seconds**, adjustable from **15–300 seconds** in Settings → Pipeline & modules → Advanced discovery limits. API clients use `options.zap_wait_seconds`. A stable pending-record count with a task for the current host remains active work; zero pending records is still required for completion.

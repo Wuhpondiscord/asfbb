@@ -1,0 +1,140 @@
+{
+  "rules": [
+    {
+      "id": "asfb-python-shell-true",
+      "languages": [
+        "python"
+      ],
+      "message": "Review subprocess execution with shell=True.",
+      "severity": "WARNING",
+      "pattern-either": [
+        {
+          "pattern": "subprocess.run(..., shell=True, ...)"
+        },
+        {
+          "pattern": "subprocess.Popen(..., shell=True, ...)"
+        },
+        {
+          "pattern": "subprocess.call(..., shell=True, ...)"
+        },
+        {
+          "pattern": "subprocess.check_output(..., shell=True, ...)"
+        }
+      ]
+    },
+    {
+      "id": "asfb-python-dynamic-code",
+      "languages": [
+        "python"
+      ],
+      "message": "Review dynamically evaluated code and input provenance.",
+      "severity": "WARNING",
+      "pattern-either": [
+        {
+          "pattern": "eval(...)"
+        },
+        {
+          "pattern": "exec(...)"
+        }
+      ]
+    },
+    {
+      "id": "asfb-python-pickle",
+      "languages": [
+        "python"
+      ],
+      "message": "Deserialization must only accept trusted input.",
+      "severity": "WARNING",
+      "pattern-either": [
+        {
+          "pattern": "pickle.load(...)"
+        },
+        {
+          "pattern": "pickle.loads(...)"
+        }
+      ]
+    },
+    {
+      "id": "asfb-python-unsafe-yaml",
+      "languages": [
+        "python"
+      ],
+      "message": "Review use of an unsafe YAML loader.",
+      "severity": "WARNING",
+      "pattern-either": [
+        {
+          "pattern": "yaml.load($DATA)"
+        },
+        {
+          "pattern": "yaml.load($DATA, Loader=yaml.Loader)"
+        },
+        {
+          "pattern": "yaml.load($DATA, Loader=yaml.UnsafeLoader)"
+        }
+      ]
+    },
+    {
+      "id": "asfb-python-tls-disabled",
+      "languages": [
+        "python"
+      ],
+      "message": "Review disabled certificate verification.",
+      "severity": "WARNING",
+      "pattern": "requests.$METHOD(..., verify=False, ...)"
+    },
+    {
+      "id": "asfb-js-eval",
+      "languages": [
+        "javascript",
+        "typescript"
+      ],
+      "message": "Review dynamic evaluation and input provenance.",
+      "severity": "WARNING",
+      "pattern": "eval(...)"
+    },
+    {
+      "id": "asfb-js-function-constructor",
+      "languages": [
+        "javascript",
+        "typescript"
+      ],
+      "message": "Review dynamic Function construction.",
+      "severity": "WARNING",
+      "pattern": "new Function(...)"
+    },
+    {
+      "id": "asfb-js-shell-command",
+      "languages": [
+        "javascript",
+        "typescript"
+      ],
+      "message": "Review shell command execution and input provenance.",
+      "severity": "WARNING",
+      "pattern-either": [
+        {
+          "pattern": "child_process.exec(...)"
+        },
+        {
+          "pattern": "child_process.execSync(...)"
+        }
+      ]
+    },
+    {
+      "id": "asfb-js-html-assignment",
+      "languages": [
+        "javascript",
+        "typescript"
+      ],
+      "message": "Review HTML assignments for untrusted content.",
+      "severity": "WARNING",
+      "patterns": [
+        {
+          "pattern": "$ELEMENT.innerHTML = $VALUE"
+        },
+        {
+          "pattern-not": "$ELEMENT.innerHTML = \"...\""
+        }
+      ]
+    }
+  ]
+}

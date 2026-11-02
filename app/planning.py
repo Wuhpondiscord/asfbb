@@ -1,9 +1,9 @@
 """Stable producer/consumer planning; never enable tools or expand target scope."""
 from urllib.parse import urlsplit
 
-MODULES = ("gau", "katana", "httpx", "zap-passive", "nuclei", "nikto", "wpscan",
+MODULES = ("gau", "katana", "httpx", "wafw00f", "zap-passive", "nuclei", "nikto", "wpscan",
            "testssl", "wapiti", "retirejs", "amass", "kiterunner", "nettacker",
-           "idor-forge", "trufflehog", "depscan", "trivy", "osv-scanner", "garak",
+           "idor-forge", "trufflehog", "semgrep", "depscan", "trivy", "osv-scanner", "garak",
            "ffuf", "arjun", "dalfox", "sqlmap")
 URL_PRODUCERS = ("gau", "katana", "ffuf", "kiterunner")
 URL_CONSUMERS = ("httpx", "zap-passive", "nuclei", "retirejs", "arjun", "dalfox", "sqlmap")
@@ -33,6 +33,7 @@ def plan(modules, mode="manual", reuse=False):
     edges.update({("gau", "katana"), ("arjun", "dalfox"), ("arjun", "sqlmap"),
                   ("httpx", "arjun"), ("httpx", "retirejs"), ("httpx", "zap-passive"),
                   ("httpx", "nuclei")})
+    edges.update({("wafw00f", c) for c in ("ffuf", "nuclei", "nikto", "wpscan", "wapiti", "arjun", "dalfox", "sqlmap")})
     if reuse:
         edges.update({("httpx", c) for c in ("nikto", "wpscan", "wapiti")})
     edges = {(p, c) for p, c in edges if p in requested and c in requested and p != c}
@@ -53,7 +54,8 @@ def plan(modules, mode="manual", reuse=False):
     warnings = [p + " runs after " + c + "; its new data will not be available to that earlier stage"
                 for p, c in sorted(edges) if positions[p] > positions[c]]
     handoffs = [{"from": p, "to": c,
-                 "data": "GET parameters" if p == "arjun" else
+                 "data": "WAF inventory / scan context" if p == "wafw00f" else
+                         "GET parameters" if p == "arjun" else
                          "page metadata" if p == "httpx" else
                          "bounded same-origin crawl seeds" if c == "katana" else "URL inventory",
                  "available": positions[p] < positions[c]}
