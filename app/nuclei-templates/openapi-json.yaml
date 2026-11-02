@@ -1,0 +1,26 @@
+id: asfb-openapi-json
+info:
+  name: OpenAPI document available
+  author: asfb
+  severity: info
+  description: A structured API specification is accessible at a common path. Public documentation may be intentional and is not an authorization bypass.
+  tags: exposure,api,metadata
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/openapi.json"
+      - "{{BaseURL}}/swagger.json"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: regex
+        part: body
+        regex:
+          - '"openapi"\s*:\s*"3\.'
+          - '"swagger"\s*:\s*"2\.'
+        condition: or
+      - type: regex
+        part: body
+        regex:
+          - '"paths"\s*:\s*\{'

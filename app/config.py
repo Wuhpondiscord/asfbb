@@ -90,6 +90,8 @@ NUCLEI_CATALOG_PAGE_SIZE = 30
 
 # Optional curated profiles (not enabled unless explicitly selected).
 NUCLEI_OPTIONAL_TEMPLATE_PATHS = {
+    "directory-listing": "/app/app/nuclei-templates/directory-listing.yaml",
+    "openapi-json": "/app/app/nuclei-templates/openapi-json.yaml",
     "bounty-ultimate-lite": "/app/app/nuclei-templates/bounty-ultimate-lite.yaml",
     "bounty-ultimate-medium": "/app/app/nuclei-templates/bounty-ultimate-medium.yaml",
     "bounty-ultimate-large": "/app/app/nuclei-templates/bounty-ultimate-large.yaml",
@@ -128,3 +130,11 @@ TESTSSL_TIMEOUT_SECONDS = 90
 WEB_PREFLIGHT_MAX_BYTES = 524288
 WEB_REPORT_MAX_BYTES = 2000000
 WEB_FINDINGS_LIMIT = 100
+
+# Keyless browser-free modules; downloaded target samples exist only in HF temp directories.
+RETIRE_MAX_FILES = 4
+RETIRE_MAX_FILE_BYTES = 524288
+RETIRE_TIMEOUT_SECONDS = 20
+WAPITI_REQUEST_LIMIT = 12
+WAPITI_SCAN_SECONDS = 25
+WAPITI_TIMEOUT_SECONDS = 40

@@ -14,16 +14,27 @@ All three require the existing active-testing confirmation, appear in job logs, 
 
 Use **Settings → Enable all modules** to select every currently implemented stage. This preserves the separate authorization checkbox. The server checks applicability when each job runs, regardless of how modules were selected.
 
-WPScan inventory works without a vulnerability API token. For vulnerability database lookups, optionally set **WPSCAN_API_TOKEN** as a Hugging Face Space **secret**. It is read from the tool's documented environment variable, never inserted into command arguments or returned report metadata. Metadata is fetched during the remote image build; scans use --no-update and isolated temporary cookie/cache paths. See [WPScan's license](https://github.com/wpscanteam/wpscan/blob/v4.2.0/LICENSE) for its usage terms.
+All implemented modules work without API keys. WPScan runs its inventory profile without a key and clearly reports unavailable vulnerability database coverage. A WPSCAN_API_TOKEN Space secret remains optional for users who already have one; it is never needed to run the pipeline.
+
+## Second group: keyless additions
+
+| Module / check | State | Runtime applicability and limits |
+| --- | --- | --- |
+| [Retire.js 6.1.0](https://github.com/RetireJS/retire.js/blob/6.1.0/node/README.md) | Implemented | Samples current-page inline scripts and same-origin script URLs, including JS inventory from earlier discovery stages. Maximum 4 files, 512 KiB per file, no redirects. Skips if no usable JavaScript is available. Runs the scanner on HF temporary files as data; never executes target JavaScript. Uses an image-bundled upstream advisory snapshot and no runtime API/key. Findings retain their original source URLs. Snapshot freshness and bounded sampling limit coverage. |
+| [Wapiti 3.3.2](https://github.com/wapiti-scanner/wapiti/wiki) | Implemented, limited profile | Browser-free CSP, HTTP-header and cookie-flag checks. Exact selected URL scope, guarded exact origin, GET/HEAD only, 12-request hard limit, configured request delay, no redirects, 25-second scan / 40-second process deadline. No injection modules, form submissions, endpoint callbacks or automatic bug reports. Separate Python 3.12 environment matches upstream requirements. |
+| Directory listing Nuclei template | Implemented, opt-in | HTML index title plus directory-navigation markers and HTTP 200. Informational observation; does not prove sensitive file exposure. |
+| OpenAPI JSON Nuclei template | Implemented, opt-in | Two common JSON paths, version and paths-object markers, HTTP 200. Runs at the origin once even when discovery found many asset paths. Public API documentation may be intentional. |
+
+Both modules appear in Settings, Enable all modules, source filters and stage logs. Sampling failures and guard limits are reported explicitly. Tests include the actual installed Retire.js scanner on a synthetic JS fixture and the actual installed Wapiti engine behind a mocked HTTP transport; they send no live-target traffic.
 
 ## Requested next groups
 
 | Requested feature | State | Intended input / applicability gate |
 | --- | --- | --- |
-| More [Nuclei templates](https://docs.projectdiscovery.io/templates/introduction) | Planned, WIP | Reviewed HTTP templates, technology gates, exact-origin constraints, existing request budgets and validation. |
-| [Gemini Nuclei template generation](https://ai.google.dev/gemini-api/docs/structured-output) | Planned | Separate draft-generation action with a Space secret and configurable model. Generated templates must pass existing template restrictions and Nuclei validation before explicit selection. Do not auto-run generated YAML. |
-| [Wapiti](https://github.com/wapiti-scanner/wapiti) | Planned | Explicit web asset, capped crawl/attack modules, selected methods, exact-origin policy. |
-| [Retire.js](https://github.com/RetireJS/retire.js) | Planned | Bounded same-origin JavaScript files or uploaded source; not arbitrary domain text passed to a filesystem scanner. |
+| More [Nuclei templates](https://docs.projectdiscovery.io/templates/introduction) | Two added; further expansion WIP | Reviewed HTTP templates, technology gates, exact-origin constraints, existing request budgets and validation. |
+| [Gemini Nuclei template generation](https://ai.google.dev/gemini-api/docs/structured-output) | Deferred under keyless preference | Hosted Gemini generation needs API credentials, so it is not part of the keyless pipeline. Any future optional integration would use a separate draft-generation action with a Space secret and configurable model. Generated templates must pass existing template restrictions and Nuclei validation before explicit selection. Do not auto-run generated YAML. |
+| [Wapiti](https://github.com/wapiti-scanner/wapiti) | Limited profile implemented | Further profiles need separately reviewed request/method limits. |
+| [Retire.js](https://github.com/RetireJS/retire.js) | Implemented for web JavaScript | Source/SBOM upload workflows remain future work. |
 | [TruffleHog](https://github.com/trufflesecurity/trufflehog) | Planned | Explicit repository/artifact input on remote infrastructure. Redacted secret findings; verification behavior must be explicit. |
 | [OWASP Amass](https://github.com/owasp-amass/amass) | Planned | Passive domain discovery first. Newly discovered subdomains are inventory and do not automatically become authorized scan targets. |
 | [OWASP dep-scan](https://github.com/owasp-dep-scan/dep-scan) | Planned | Source, SBOM or container artifact; a URL-only job is inapplicable. |

@@ -16,9 +16,23 @@ RUN gem install wpscan -v 4.2.0 --no-document
 # Metadata is fetched during the remote image build, never during a target scan.
 RUN wpscan --update
 
+FROM node:22-bookworm-slim AS js-tools
+RUN npm install --global retire@6.1.0
+RUN mkdir -p /opt/retire-db && node -e "fetch('https://raw.githubusercontent.com/RetireJS/retire.js/6.1.0/repository/jsrepository-v5.json').then(r => { if (!r.ok) throw Error(r.status); return r.text(); }).then(t => { JSON.parse(t); require('fs').writeFileSync('/opt/retire-db/jsrepository-v5.json', t); }).catch(e => { console.error(e); process.exit(1); })"
+
+FROM python:3.12-slim-bookworm AS wapiti-tools
+RUN python -m venv --copies /opt/wapiti && /opt/wapiti/bin/pip install --no-cache-dir wapiti3==3.3.2
+
 FROM zaproxy/zap-stable
 USER root
 COPY --from=wp-tools /usr/local/ /usr/local/
+COPY --from=js-tools /usr/local/bin/node /usr/local/bin/node
+COPY --from=js-tools /usr/local/lib/node_modules/retire /opt/retire
+COPY --from=js-tools /opt/retire-db /opt/retire-db
+COPY --from=wapiti-tools /opt/wapiti /opt/wapiti
+COPY --from=wapiti-tools /usr/local/bin/python3.12 /usr/local/bin/python3.12
+COPY --from=wapiti-tools /usr/local/lib/libpython3.12.so* /usr/local/lib/
+COPY --from=wapiti-tools /usr/local/lib/python3.12 /usr/local/lib/python3.12
 COPY --from=wp-tools /root/.cache/wpscan/db /opt/wpscan-db
 COPY --from=pd-tools /opt/nikto /opt/nikto
 COPY --from=pd-tools /opt/testssl /opt/testssl
@@ -29,7 +43,7 @@ COPY --from=pd-tools /usr/local/bin/gau /usr/local/bin/gau
 COPY --from=pd-tools /usr/local/bin/ffuf /usr/local/bin/ffuf
 COPY --from=pd-tools /usr/local/bin/dalfox /usr/local/bin/dalfox
 COPY --from=pd-tools /opt/sqlmap /opt/sqlmap
-RUN apt-get update && apt-get install -y --no-install-recommends python3-venv python3-pip perl libxml-writer-perl libxml-libxml-perl libjson-perl libnet-ssleay-perl libio-socket-ssl-perl openssl libcurl4 libyaml-0-2 libgmp10 libffi8 libgdbm6 libgdbm-compat4 libreadline8 zlib1g procps dnsutils ldnsutils coreutils bsdextrautils xxd gawk socat curl libidn2-0 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends python3-venv python3-pip perl libxml-writer-perl libxml-libxml-perl libjson-perl libnet-ssleay-perl libio-socket-ssl-perl openssl libcurl4 libyaml-0-2 libgmp10 libffi8 libgdbm6 libgdbm-compat4 libreadline8 zlib1g procps dnsutils ldnsutils coreutils bsdextrautils xxd gawk socat curl libidn2-0 libstdc++6 libsqlite3-0 && rm -rf /var/lib/apt/lists/*
 RUN python3 -m venv /opt/asfb-venv && /opt/asfb-venv/bin/pip install --no-cache-dir fastapi==0.115.12 uvicorn==0.34.2 python-multipart==0.0.20 httpx==0.28.1 arjun==2.2.7 PyYAML==6.0.2
 WORKDIR /app
 COPY --chown=zap:zap app /app/app

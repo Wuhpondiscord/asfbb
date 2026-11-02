@@ -582,7 +582,7 @@ async def run_scan_job(identifier, spec):
                     job["alerts"].extend(result["alerts"])
                 elif module in WEB_MODULES:
                     result = await run_web_module(
-                        module, url, host, spec.user_agent, spec.delay_seconds)
+                        module, url, host, spec.user_agent, spec.delay_seconds, endpoints)
                     job["reviews"].append(result)
                     job["alerts"].extend(result.get("alerts", []))
                 elif module in ACTIVE_MODULES:

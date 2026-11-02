@@ -87,9 +87,10 @@ async def nuclei(url, host, agent, urls=None, default_ids=None,
     # on /app/main.js or /manifest.json can produce misleading or wasted requests.
     origin = urlsplit(url)._replace(path="/", query="", fragment="").geturl()
     exposure_profile = any(name.startswith("bounty-ultimate-") for name in selected_ids)
-    if exposure_profile:
+    if exposure_profile or "openapi-json" in selected_ids:
         targets = [origin]
-        scope_strategy = "origin-only exposure profile"
+        scope_strategy = ("origin-only exposure profile" if exposure_profile
+                          else "origin-only API metadata profile")
     else:
         def target_priority(candidate):
             parts = urlsplit(candidate)

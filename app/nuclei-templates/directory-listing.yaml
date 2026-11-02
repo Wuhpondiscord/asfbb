@@ -1,0 +1,27 @@
+id: asfb-directory-listing
+info:
+  name: Directory listing page observed
+  author: asfb
+  severity: info
+  description: An index page with directory navigation was observed. This does not establish sensitive file exposure.
+  tags: exposure,listing
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: header
+        words: ["text/html"]
+        case-insensitive: true
+      - type: regex
+        part: body
+        regex:
+          - '(?i)<title>\s*Index of [^<]*</title>'
+      - type: word
+        part: body
+        words: ["Parent Directory", "href="]
+        condition: and
