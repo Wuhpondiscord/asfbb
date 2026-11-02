@@ -2,13 +2,18 @@
 import asyncio
 import json
 import sys
+import os
 from pathlib import Path
 
 import nettacker
 import yaml
 from nettacker.core.lib import http as engine
-from wapiti_guard import validate_public
+from scope import public_host
 from urllib.parse import urlsplit
+
+
+async def validate_public(host):
+    await asyncio.to_thread(public_host, host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
 
 
 async def bounded_action(action, options):
