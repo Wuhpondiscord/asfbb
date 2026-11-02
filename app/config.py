@@ -118,3 +118,13 @@ DALFOX_RATE_LIMIT = 2
 # ZAP reports no active task for the current host, stop waiting and report
 # partial coverage instead of consuming the entire deadline.
 ZAP_PASSIVE_STALL_CHECKS = 6
+
+# Optional web scanners: internal deadlines leave time for JSON report flushing.
+NIKTO_SCAN_SECONDS = 45
+NIKTO_TIMEOUT_SECONDS = 60
+WPSCAN_SCAN_SECONDS = 55
+WPSCAN_TIMEOUT_SECONDS = 70
+TESTSSL_TIMEOUT_SECONDS = 90
+WEB_PREFLIGHT_MAX_BYTES = 524288
+WEB_REPORT_MAX_BYTES = 2000000
+WEB_FINDINGS_LIMIT = 100

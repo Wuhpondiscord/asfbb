@@ -2,6 +2,7 @@ import asyncio
 import json
 import re
 import os
+import signal
 import tempfile
 import time
 from urllib.parse import urlsplit
@@ -13,7 +14,8 @@ def clean_output(data):
 
 async def execute(args, timeout):
     try:
-        p = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        p = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                                                 start_new_session=(os.name == "posix"))
     except FileNotFoundError:
         return ["Binary missing"], "unavailable"
     # communicate() owns the pipe readers. Cancelling it at the deadline and
@@ -22,6 +24,14 @@ async def execute(args, timeout):
     timed_out = False
 
     def stop_process():
+        # Shell-based tools spawn openssl/timeout children. Stop the whole
+        # isolated process group so they cannot hold pipes or outlive a job.
+        if os.name == "posix" and getattr(p, "pid", None) is not None:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            return
         if p.returncode is None:
             try:
                 p.kill()

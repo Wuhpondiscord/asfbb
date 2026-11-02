@@ -18,7 +18,11 @@ from .jwtcheck import inspect_jwt
 from .pipeline import katana, nuclei, gau, probe, in_host
 from .review import ACTIVE_MODULES, review, choose_arjun_target, choose_dalfox_target
 from . import config
+from .web_modules import MODULES as WEB_MODULES, run_web_module
+
 from . import nuclei_catalog
+
+ACTIVE_MODULES = ACTIVE_MODULES | WEB_MODULES
 
 
 ZAP_KEY = os.environ.get("ZAP_API_KEY", "")
@@ -576,6 +580,11 @@ async def run_scan_job(identifier, spec):
                         url, host, spec.user_agent, endpoints,
                         selection.default_ids, remote, selection.custom_templates)
                     job["alerts"].extend(result["alerts"])
+                elif module in WEB_MODULES:
+                    result = await run_web_module(
+                        module, url, host, spec.user_agent, spec.delay_seconds)
+                    job["reviews"].append(result)
+                    job["alerts"].extend(result.get("alerts", []))
                 elif module in ACTIVE_MODULES:
                     review_url = (choose_arjun_target(url, endpoints, host)
                                   if module == "arjun" else

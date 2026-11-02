@@ -22,7 +22,7 @@ jobs:
           ZAP_API_KEY: test-key
         run: python3 -m pytest -q tests/
       - name: Validate Python backend syntax
-        run: python3 -m py_compile app/main.py app/pipeline.py app/review.py app/zap_control.py app/scope.py app/jwtcheck.py app/storage.py
+        run: python3 -m py_compile app/main.py app/pipeline.py app/web_modules.py app/config.py app/review.py app/zap_control.py app/scope.py app/jwtcheck.py app/storage.py
       - name: Validate dashboard JavaScript syntax
         run: |
           python3 - <<'PY'
@@ -36,7 +36,25 @@ jobs:
       - name: Build and verify scanner container
         run: |
           docker build --progress plain -t asfb-ci .
-          docker run --rm --entrypoint /bin/sh asfb-ci -ec '
+          docker run --rm -v "$PWD/tests:/app/tests:ro" --entrypoint /bin/sh asfb-ci -ec '
+            test -f /opt/nikto/program/nikto.pl
+            test -f /opt/testssl/testssl.sh
+            ruby -c /app/app/wpscan_runner.rb
+            ruby -c /app/app/wpscan_scope.rb
+            ruby /app/tests/test_wpscan_scope.rb
+            ruby /app/app/wpscan_runner.rb --hh > /tmp/wpscan-help
+            grep -q -- "--max-scan-duration" /tmp/wpscan-help
+            grep -q -- "--max-response-size" /tmp/wpscan-help
+            grep -q -- "--plugins-version-detection" /tmp/wpscan-help
+            grep -q -- "--themes-version-detection" /tmp/wpscan-help
+            grep -q -- "--throttle" /tmp/wpscan-help
+            perl /opt/nikto/program/nikto.pl -Help > /tmp/nikto-help
+            grep -q -- "-maxtime" /tmp/nikto-help
+            grep -q -- "-Pause" /tmp/nikto-help
+            bash /opt/testssl/testssl.sh --help > /tmp/testssl-help
+            grep -q -- "-S" /tmp/testssl-help
+            grep -q -- "--jsonfile" /tmp/testssl-help
+            test -s /home/zap/.cache/wpscan/db/metadata.json
             test -x /usr/local/bin/ffuf
             test -x /usr/local/bin/dalfox
             test -x /usr/local/bin/nuclei
