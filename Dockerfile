@@ -70,7 +70,7 @@ WORKDIR /app
 COPY --chown=zap:zap app /app/app
 RUN test -s /app/app/nuclei-templates/technology-headers.yaml
 COPY --chown=zap:zap start.sh /app/start.sh
-RUN chmod +x /app/start.sh && mkdir -p /app/data/scanner-cache /home/zap/.cache/wpscan && cp -a /opt/wpscan-db /home/zap/.cache/wpscan/db && chown -R zap:zap /app/data /home/zap/.cache/wpscan && ldconfig
+RUN chmod +x /app/start.sh && mkdir -p /app/data/scanner-cache /home/zap/.cache/wpscan /home/zap/.config/garak /home/zap/.local/share/garak && cp -a /opt/wpscan-db /home/zap/.cache/wpscan/db && chown -R zap:zap /app/data /home/zap/.cache /home/zap/.config /home/zap/.local && ldconfig
 USER zap
 ENV GEM_HOME="/usr/local/bundle"
 ENV PATH="/opt/asfb-venv/bin:/usr/local/bundle/bin:$PATH" PYTHONUNBUFFERED=1

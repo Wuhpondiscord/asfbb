@@ -24,7 +24,26 @@ if mode == "garak":
                                        "prompt_field": "prompt", "response_field": "response", "delay": 1})
     assert len(calls) == 2
     assert all(test["matched"] for test in result["tests"]), result
-    print("garak installed REST and detector smoke passed")
+    def original(session, request, **kwargs):
+        assert kwargs["allow_redirects"] is False and kwargs["stream"] is True
+        response = requests.Response()
+        response.status_code = 200
+        response._content = b"bounded fixture"
+        response._content_consumed = True
+        return response
+    guarded = garak_runner.guarded_send(original, "https://example.invalid/llm", 1.5)
+    request = requests.Request("POST", "https://example.invalid/llm").prepare()
+    with patch.object(garak_runner.socket, "getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]), \
+         patch.object(garak_runner.time, "sleep"):
+        guarded(requests.Session(), request)
+        guarded(requests.Session(), request)
+        try:
+            guarded(requests.Session(), request)
+        except requests.RequestException:
+            pass
+        else:
+            raise AssertionError("garak request budget was not enforced")
+    print("garak installed REST, detector and request-guard smoke passed")
 elif mode == "nettacker":
     import nettacker_runner
     async def no_dns(*args): pass

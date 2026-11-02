@@ -59,6 +59,8 @@ jobs:
             grep -q -- "--scope" /tmp/depscan-vdb-help
             /opt/garak/bin/python /app/tests/final_python_smoke.py garak
             /opt/nettacker/bin/python /app/tests/final_python_smoke.py nettacker
+            /opt/asfb-venv/bin/python -c "from pathlib import Path; from app.template_builder import build_draft; Path(\"/tmp/asfb-draft.yaml\").write_text(build_draft(\"CI observation\", \"/status\", \"healthy\"))"
+            /usr/local/bin/nuclei -validate -t /tmp/asfb-draft.yaml -duc > /tmp/asfb-draft-check 2>&1
             /usr/local/bin/node /opt/retire/lib/cli.js --help > /tmp/retire-help
             grep -q -- "--path" /tmp/retire-help
             grep -q -- "--jsrepo" /tmp/retire-help
