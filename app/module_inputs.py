@@ -39,6 +39,7 @@ def clean_sbom(text):
 
 class ModuleInputs(BaseModel):
     source_text: str = Field(default="", max_length=200000)
+    trufflehog_verify: bool = False
     sbom_text: str = Field(default="", max_length=1000000)
     api_target: bool = False
     idor_path: str = Field(default="", max_length=250)
@@ -90,7 +91,8 @@ class ModuleInputs(BaseModel):
         return values
 
     def public_summary(self):
-        return {"source_bytes": len(self.source_text.encode("utf-8")),
+        return {"trufflehog_verify": self.trufflehog_verify,
+                "source_bytes": len(self.source_text.encode("utf-8")),
                 "sbom_components": len(json.loads(self.sbom_text)["components"]) if self.sbom_text else 0,
                 "api_target": self.api_target, "llm_path": self.llm_path,
                 "idor_configured": bool(self.idor_path and self.idor_baseline and self.idor_values),

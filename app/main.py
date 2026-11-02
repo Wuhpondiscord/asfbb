@@ -806,6 +806,8 @@ async def run_scan_job(identifier, spec):
                     diagnostics["coverage_budget" if module == "dalfox" else "coverage"] = result["coverage"]
                 if result.get("seed_count") is not None:
                     diagnostics["crawl_seeds"] = result["seed_count"]
+                if result.get("verification") is not None:
+                    diagnostics["verification"] = result["verification"]
                 diagnostics["coverage_profile"] = spec.options.coverage_profile
                 if result.get("deadline_seconds") is not None:
                     diagnostics["deadline_seconds"] = result["deadline_seconds"]

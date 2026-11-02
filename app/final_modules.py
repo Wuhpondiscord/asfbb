@@ -4,6 +4,7 @@ import base64
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
@@ -43,17 +44,108 @@ def json_rows(rows):
     return found
 
 
-def parse_trufflehog(rows, url):
-    # Never return Raw, RawV2, Redacted, ExtraData, decoder text or source snippets.
-    findings = []
+# Audited pinned v3.99.7 provider checks; never enable arbitrary-host/DB verifiers.
+TRUFFLEHOG_VERIFIERS = frozenset({"AWS", "Github", "Slack", "HuggingFace", "OpenAI"})
+TRUFFLEHOG_VERIFY_LIMIT = 10
+TRUFFLEHOG_VERIFY_SECONDS = 30
+
+
+def trufflehog_candidates(rows):
+    # Keys and native metadata remain in memory only, never in returned diagnostics.
+    candidates = {}
     for row in json_rows(rows):
-        if row.get("DetectorName"):
-            name = str(row["DetectorName"])[:80]
-            findings.append(alert("trufflehog", "Potential " + name + " secret", url,
-                                  "Unverified secret-like material in supplied source. Value and context redacted.",
-                                  "Medium", name))
-    unique = {(x["name"], x["url"]): x for x in findings}
-    return list(unique.values())[:100]
+        name = row.get("DetectorName")
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", name):
+            continue
+        raw = row.get("RawV2") or row.get("Raw") or ""
+        if not isinstance(raw, str):
+            continue
+        candidates.setdefault((name, raw), row)
+    return candidates
+
+
+def verification_source(name, row):
+    raw = row.get("Raw")
+    if not isinstance(raw, str) or not raw or len(raw) > 8000 or any(c in raw for c in "\r\n\x00"):
+        return None
+    if name == "AWS":
+        # The upstream canary verifier uses SNS Publish. Do not invoke it.
+        extra = row.get("ExtraData")
+        if isinstance(extra, dict) and str(extra.get("is_canary", "")).lower() == "true":
+            return None
+        pair = row.get("RawV2", "")
+        if not isinstance(pair, str) or not re.fullmatch(r"(?:AKIA|ABIA|ACCA)[A-Z0-9]{16}:[A-Za-z0-9/+=]{40}", pair):
+            return None
+        return pair.replace(":", "\n", 1)
+    # Preserve the context needed by GitHub's legacy 40-character token detector.
+    return ("github_token = " if name == "Github" else "") + raw
+
+
+async def verify_trufflehog(rows, root):
+    candidates = trufflehog_candidates(rows)
+    states = {key: "not_attempted" for key in candidates}
+    attempted = 0
+    started = time.monotonic()
+    directory = root / "verification"
+    directory.mkdir(mode=0o700)
+    for key, row in candidates.items():
+        name, _ = key
+        text = verification_source(name, row) if name in TRUFFLEHOG_VERIFIERS else None
+        remaining = TRUFFLEHOG_VERIFY_SECONDS - (time.monotonic() - started)
+        if text is None or attempted >= TRUFFLEHOG_VERIFY_LIMIT or remaining < 1:
+            continue
+        path = directory / "candidate.txt"
+        path.write_text(text, encoding="utf-8")
+        path.chmod(0o600)
+        args = ["/usr/local/bin/trufflehog", "filesystem", str(path), "--json",
+                "--include-detectors", name, "--results", "verified,unverified,unknown",
+                "--allow-verification-overlap", "--no-verification-cache", "--no-update",
+                "--concurrency", "1", "--force-skip-binaries", "--force-skip-archives",
+                "--fail-on-scan-errors"]
+        attempted += 1
+        try:
+            verified_rows, status = await execute(args, min(12, max(1, int(remaining))))
+        except Exception:
+            # Executor failures must preserve detection results without persisting exception text.
+            verified_rows, status = [], "failed"
+        finally:
+            path.unlink(missing_ok=True)
+        matches = [item for candidate, item in trufflehog_candidates(verified_rows).items() if candidate == key]
+        # Missing output, timeout and transport/provider errors never mean invalid.
+        state = "unknown"
+        if any(item.get("Verified") is True for item in matches):
+            state = "verified"
+        elif status == "completed" and matches and all(
+                item.get("Verified") is False and not item.get("VerificationError") for item in matches):
+            state = "unverified"
+        states[key] = state
+    return states, attempted
+
+
+def parse_trufflehog(rows, url, states=None):
+    # Never return Raw, RawV2, Redacted, ExtraData, errors or source snippets.
+    groups = {}
+    for key in trufflehog_candidates(rows):
+        name, _ = key
+        state = (states or {}).get(key, "not_attempted")
+        groups[(name, state)] = groups.get((name, state), 0) + 1
+    descriptions = {
+        "verified": "Provider authentication confirmed this credential at scan time.",
+        "unverified": "TruffleHog did not confirm validity. This does not prove the credential is invalid.",
+        "unknown": "Verification was inconclusive, failed or timed out; validity is unknown.",
+        "not_attempted": "Detection only; verification was disabled, unsupported, excluded or outside the verification budget.",
+    }
+    findings = []
+    for (name, state), count in groups.items():
+        label = {"verified": "Verified", "unverified": "Unverified",
+                 "unknown": "Inconclusive", "not_attempted": "Detection-only"}[state]
+        finding = alert("trufflehog", label + " " + name + " secret", url,
+                        descriptions[state] + f" {count} distinct candidate(s). Values and context redacted.",
+                        "High" if state == "verified" else "Medium", name)
+        finding.update(verification_status=state, candidate_count=count,
+                       confidence="High" if state == "verified" else "Low")
+        findings.append(finding)
+    return findings[:100]
 
 
 def parse_dependency_report(module, report, url):
@@ -128,10 +220,12 @@ async def run(module, url, host, agent, delay, inputs=None, profile="current"):
         args, deadline = [], 60
         report, findings, hosts, endpoints, probes = None, [], [], [], []
         reason = ""
+        verification = None
         if module == "trufflehog":
             source = root / "source"
             source.mkdir()
             (source / "source.txt").write_text(values.source_text, encoding="utf-8")
+            (source / "source.txt").chmod(0o600)
             args = ["/usr/local/bin/trufflehog", "filesystem", str(source), "--json",
                     "--no-verification", "--no-update", "--concurrency", "1",
                     "--force-skip-binaries", "--force-skip-archives", "--fail-on-scan-errors"]
@@ -198,7 +292,27 @@ async def run(module, url, host, agent, delay, inputs=None, profile="current"):
             raise ValueError("Unsupported module")
         rows, status = await execute(args, deadline)
         if module == "trufflehog":
-            findings = parse_trufflehog(rows, url)
+            states, attempted = {}, 0
+            if values.trufflehog_verify:
+                states, attempted = await verify_trufflehog(rows, root)
+                deadline += TRUFFLEHOG_VERIFY_SECONDS
+            findings = parse_trufflehog(rows, url, states)
+            candidates = trufflehog_candidates(rows)
+            eligible = sum(name in TRUFFLEHOG_VERIFIERS and verification_source(name, row) is not None
+                           for (name, _), row in candidates.items())
+            verification = {"enabled": values.trufflehog_verify, "attempted": attempted,
+                            "eligible": eligible,
+                            "budget_limited": max(0, eligible - attempted) if values.trufflehog_verify else 0,
+                            "limit": TRUFFLEHOG_VERIFY_LIMIT, "budget_seconds": TRUFFLEHOG_VERIFY_SECONDS,
+                            **{state: sum(states.get(key, "not_attempted") == state for key in candidates)
+                               for state in ("verified", "unverified", "unknown", "not_attempted")}}
+            if values.trufflehog_verify:
+                reason = ("Provider verification enabled; up to 10 candidates / 30s; " +
+                          ", ".join(f"{verification[state]} {state.replace('_', ' ')}"
+                                    for state in ("verified", "unverified", "unknown", "not_attempted")) +
+                          "; values, identity metadata and provider errors redacted")
+                if (verification["unknown"] or verification["budget_limited"]) and status == "completed":
+                    status = "partial"
         elif module == "amass":
             path = root / "hosts.txt"
             candidates = (path.read_text(encoding="utf-8", errors="replace").splitlines()[:500] if path.is_file() else []) + rows
@@ -264,8 +378,14 @@ async def run(module, url, host, agent, delay, inputs=None, profile="current"):
         if status in ("completed", "findings") and findings:
             status = "findings"
         diag = diagnostics(rows) if status not in ("completed", "findings") else ""
+        summary = (f"{module}: {len(findings)} unverified findings; {len(hosts)} inventory hosts; "
+                   f"{len(endpoints)} observed routes; status: {status}")
+        if verification is not None:
+            summary = ("trufflehog: " + ", ".join(f"{verification[state]} {state.replace('_', ' ')}"
+                       for state in ("verified", "unverified", "unknown", "not_attempted")) + f"; status: {status}")
         return {"source": module, "target": url, "status": status, "alerts": findings,
+                **({"verification": verification} if verification is not None else {}),
                 "hosts": hosts, "endpoints": endpoints, "probes": probes,
                 "deadline_seconds": deadline,
                 "reason": (reason + ("; " + diag if diag else ""))[:700],
-                "output": f"{module}: {len(findings)} unverified findings; {len(hosts)} inventory hosts; {len(endpoints)} observed routes; status: {status}"}
+                "output": summary}

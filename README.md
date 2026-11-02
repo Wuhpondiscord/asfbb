@@ -5,6 +5,18 @@ sdk: docker
 app_port: 7860
 ---
 
+## Optional TruffleHog verification
+
+In **Settings → Module inputs**, supply source text and select **Verify found credentials I own or am authorized to test**. Select TruffleHog in the pipeline as usual. Verification is off by default, is not enabled by Full pipeline, and resets after a successful scan submission. No separate provider API key is required: verification authenticates with the detected credential from the HF worker to its provider.
+
+All detector types still run in a detection-only first pass. A second pass checks up to 10 distinct candidates within a shared 30-second budget (one worker, up to 12 seconds per candidate). The pinned native verifiers are restricted to AWS access-key pairs, GitHub, Slack, Hugging Face and OpenAI. Each candidate gets its own temporary input to prevent cross-pairing; arbitrary-host/database/private-key verifiers, custom verifier URLs, account/resource analysis and known AWS canaries are excluded. AWS canary verification uses a different upstream operation and remains detection-only. Other types and candidates outside the budget remain visible.
+
+Findings are grouped by detector and result: **Verified** (provider authentication confirmed; high confidence), **Unverified** (TruffleHog did not confirm validity), **Inconclusive** (provider/transport error, missing output or timeout), or **Detection-only** (not attempted). Unverified does not prove a secret is invalid. Inconclusive or exhausted-budget verification marks the stage partial. Job logs include only verification counts and budget diagnostics; detection findings survive verification failures.
+
+Secret values, source snippets, identity metadata and provider error text are never returned in results or logs. Source and candidate files are temporary on HF and removed after use. API clients opt in with `options.inputs.trufflehog_verify: true` alongside `source_text`. Only a boolean, source byte count and sanitized result counts are persisted.
+
+Implementation follows the [pinned TruffleHog documentation](https://github.com/trufflesecurity/trufflehog/blob/v3.99.7/README.md) and its provider/JSON output implementations. GitHub-hosted tests mock verification responses; the installed-binary smoke remains explicitly `--no-verification` and does not use real credentials.
+
 ## Direct URLs and target-list imports
 
 Use **Scope & scanning → Import targets** to paste one URL, paste a list or upload a file. A question-mark button shows format examples on hover/focus and can be pinned with a click/tap. Escape or an outside click closes it.
