@@ -15,7 +15,7 @@ from .pipeline import execute
 def build_draft(name, path, word):
     if not 3 <= len(name) <= 100 or not 1 <= len(word) <= 200:
         raise ValueError("Supply a title and a bounded body-match string")
-    if not re.fullmatch(r"/[A-Za-z0-9_./-]{0,120}", path) or ".." in path:
+    if path.startswith("//") or not re.fullmatch(r"/[A-Za-z0-9_./-]{0,120}", path) or ".." in path:
         raise ValueError("Path must be a simple same-origin absolute path")
     document = {"id": "asfb-draft-" + re.sub("[^a-z0-9]+", "-", name.lower()).strip("-"),
                 "info": {"name": name, "author": "asfb", "severity": "info",
