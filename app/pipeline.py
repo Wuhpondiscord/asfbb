@@ -67,11 +67,34 @@ def in_host(url, host):
     except ValueError:
         return False
 
-async def katana(url, host, agent, depth=1, limit=None):
-    rows, status = await execute(["/usr/local/bin/katana", "-u", url, "-d", str(max(1,min(int(depth),5))), "-fs", "fqdn", "-c", "1",
-        "-p", "1", "-rl", "1", "-ct", "30s", "-timeout", "8", "-retry", "0",
-        "-H", "User-Agent: " + agent, "-silent", "-duc"], config.KATANA_TIMEOUT_SECONDS)
-    return {"status": status, "endpoints": list(dict.fromkeys(x.strip() for x in rows if in_host(x.strip(), host)))[:max(1, min(int(limit or config.ENDPOINT_LIMIT_DEFAULT), config.ENDPOINT_LIMIT_MAX))], "reason": " | ".join(x[:160] for x in rows if x.startswith("[diagnostic]") or x.startswith("[stderr]"))[:350]}
+async def katana(url, host, agent, depth=1, limit=None, seed_urls=None, coverage_profile="current"):
+    from .coverage import profile as coverage_settings
+    from .planning import crawl_seeds
+    settings = coverage_settings(coverage_profile)
+    seeds = crawl_seeds(url, seed_urls or [], settings["katana_seeds"]) if seed_urls is not None else [url]
+    with tempfile.TemporaryDirectory(prefix="asfb-katana-") as tmp:
+        args = ["/usr/local/bin/katana"]
+        if len(seeds) > 1:
+            path = os.path.join(tmp, "seeds.txt")
+            with open(path, "w", encoding="utf-8") as source:
+                source.write("\n".join(seeds) + "\n")
+            args.extend(["-list", path])
+        else:
+            args.extend(["-u", url])
+        if seed_urls is not None:
+            parts = urlsplit(url)
+            port = parts.port or (443 if parts.scheme == "https" else 80)
+            port_pattern = ("(?::" + str(port) + ")?") if port in (80, 443) else ":" + str(port)
+            args.extend(["-cs", "^" + re.escape(parts.scheme + "://" + parts.hostname) +
+                         port_pattern + r"(?:[/?#]|$)"])
+        args.extend(["-d", str(max(1, min(int(depth), 5))), "-fs", "fqdn", "-c", "1",
+                     "-p", "1", "-rl", "1", "-ct", "30s", "-timeout", "8", "-retry", "0",
+                     "-H", "User-Agent: " + agent, "-silent", "-duc"])
+        rows, status = await execute(args, settings["katana_timeout"] if seed_urls is not None
+                                      else config.KATANA_TIMEOUT_SECONDS)
+    return {"status": status, "endpoints": list(dict.fromkeys(x.strip() for x in rows if in_host(x.strip(), host)))[:max(1, min(int(limit or config.ENDPOINT_LIMIT_DEFAULT), config.ENDPOINT_LIMIT_MAX))],
+            "seed_count": len(seeds), "seeds": seeds,
+            "reason": " | ".join(x[:160] for x in rows if x.startswith("[diagnostic]") or x.startswith("[stderr]"))[:350]}
 
 async def nuclei(url, host, agent, urls=None, default_ids=None,
                  community_templates=None, custom_templates=None):
@@ -327,7 +350,7 @@ async def probe(urls, host, agent, limit=1):
                 path = handle.name
                 handle.write("\n".join(subset) + "\n")
             args = ["/usr/local/bin/pd-httpx", "-l", path, "-json", "-silent",
-                    "-rl", "1", "-threads", "1", "-timeout", "8", "-retries", "0",
+                    "-rl", "1", "-threads", "1", "-timeout", "8", "-retries", "0", "-ct",
                     "-H", "User-Agent: " + agent, "-no-color"]
             rows, status = await execute(
                 args, config.HTTPX_TIMEOUT_SECONDS + len(subset) * 2)
@@ -353,6 +376,7 @@ async def probe(urls, host, agent, limit=1):
             probes.append({"url": found, "status_code": item.get("status_code"),
                            "title": str(item.get("title") or "")[:160],
                            "webserver": str(item.get("webserver") or "")[:120],
+                           "content_type": str(item.get("content_type") or item.get("content-type") or "")[:120],
                            "source": "httpx"})
     reason = " | ".join(x[:160] for x in all_rows
                         if x.startswith("[stderr]") or x.startswith("[diagnostic]"))[:350]

@@ -7,10 +7,12 @@ from collections import Counter
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from .pipeline import execute, in_host
 from . import config
+from .coverage import profile as coverage_settings
 
 ACTIVE_MODULES = {"ffuf", "sqlmap", "dalfox", "arjun"}
 
-def command(module, url, host):
+def command(module, url, host, profile="current"):
+    settings = coverage_settings(profile)
     if not in_host(url, host):
         raise ValueError("Review URL must stay on the selected exact host")
     if module == "ffuf":
@@ -26,8 +28,8 @@ def command(module, url, host):
         # authoritative for discovery/preflight or network stalls.
         return ["/usr/local/bin/dalfox", "scan", url, "--workers", str(config.DALFOX_WORKERS),
                 "--timeout", str(config.DALFOX_HTTP_TIMEOUT_SECONDS),
-                "--scan-timeout", str(config.DALFOX_SCAN_TIMEOUT_SECONDS),
-                "--max-payloads-per-param", str(config.DALFOX_PAYLOADS_PER_PARAM),
+                "--scan-timeout", str(config.DALFOX_SCAN_TIMEOUT_SECONDS if profile == "current" else settings["dalfox_scan_seconds"]),
+                "--max-payloads-per-param", str(config.DALFOX_PAYLOADS_PER_PARAM if profile == "current" else settings["dalfox_payloads"]),
                 "--rate-limit", str(config.DALFOX_RATE_LIMIT),
                 "--skip-mining", "--skip-waf-probe", "--no-color", "--silence", "-f", "json"]
     if module == "sqlmap":
@@ -245,10 +247,11 @@ def read_dalfox_report(path, host, default_url):
     return findings[:config.DALFOX_FINDINGS_LIMIT], meta
 
 
-async def review(module, url, host):
+async def review(module, url, host, profile="current"):
+    settings = coverage_settings(profile)
     if module == "sqlmap" and not urlsplit(url).query:
         return {"source": module, "status": "skipped", "target": url, "output": "", "reason": "URL has no query parameters"}
-    args = command(module, url, host)
+    args = command(module, url, host, profile)
     parameters = []
     dalfox_findings, dalfox_meta = [], {}
     if module == "arjun":
@@ -260,7 +263,7 @@ async def review(module, url, host):
     elif module == "dalfox":
         with tempfile.TemporaryDirectory(prefix="asfb-dalfox-") as tmp:
             path = str(Path(tmp) / "findings.json")
-            lines, status = await execute(args + ["-o", path], config.DALFOX_TIMEOUT_SECONDS)
+            lines, status = await execute(args + ["-o", path], config.DALFOX_TIMEOUT_SECONDS if profile == "current" else settings["dalfox_timeout"])
             dalfox_findings, dalfox_meta = read_dalfox_report(path, host, url)
     elif module == "sqlmap":
         with tempfile.TemporaryDirectory(prefix="asfb-sqlmap-") as tmp:
@@ -304,6 +307,8 @@ async def review(module, url, host):
         # mining doesn't. Don't imply an exhaustive reflected-XSS assessment.
         reason = "Bounded DOM/URL review; no query parameters supplied. Dictionary mining is disabled."
     return {"source": module, "status": status, "target": url,
+            "coverage": {"profile": profile, "budget_seconds": settings["dalfox_scan_seconds"],
+                         "payloads_per_parameter": settings["dalfox_payloads"]} if module == "dalfox" else {},
             "exit_code": exit_code,
             "metadata": dalfox_meta,
             "findings": dalfox_findings,

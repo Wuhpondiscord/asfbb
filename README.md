@@ -5,6 +5,23 @@ sdk: docker
 app_port: 7860
 ---
 
+## Guided pipelines and coverage profiles
+
+The dashboard now defaults to **Guided** ordering and the **Balanced** coverage budget. Under Settings → Pipeline order & coverage, switch to **Manual** to preserve the exact comma-separated order. Guided mode reorders only enabled modules: URL discovery runs before URL consumers, HTTPX metadata is available before applicable page reviews, and Arjun runs before Dalfox/SQLmap. Missing modules are never automatically enabled. The preview and each job's stored plan show requested/effective order, handoffs and manual-order warnings.
+
+The extended-reuse checkbox passes a bounded, exact-origin archive URL sample into Katana, prioritizes observed successful responses for ZAP/Nuclei/Arjun, and selects observed HTML pages for applicable web modules. Katana keeps one worker, one request/second, explicit origin scope, and at most 1–3 seeds depending on profile. New hostnames from Amass remain inventory; they do not become authorized scan targets automatically. Manual pipelines can still reuse data produced earlier in their chosen order.
+
+| Coverage | Retire.js sample | Dalfox payloads / scan / process cap | Amass internal / process cap |
+| --- | --- | --- | --- |
+| Previous limits | 4 files, 512 KiB each | 30 / 30s / 65s | 1 minute / 65s |
+| Quick | 4 files, 512 KiB each | 8 / 30s / 60s | 1 minute / 65s |
+| Balanced | 8 files, 2 MiB each | 12 / 60s / 90s | 1 minute / 95s |
+| Thorough | 16 files, 4 MiB each | 30 / 120s / 150s | 2 minutes / 150s |
+
+Retire.js balances inline and external samples, tries later candidates after failed or oversized bundles, and records eligible/sampled/omitted counts separately from the scanner engine status. Sampling also has overall time and attempt budgets. A completed engine with excluded resources still reports partial coverage. Larger profiles increase time and requests; they do not guarantee that external providers or targets will answer. No timeout or sampling gap is converted into a clean result.
+
+The plan endpoint (`POST /api/pipeline/plan`) previews without queuing or scanning. New options are `order_mode`, `reuse_discovery`, and `coverage_profile`. Existing API clients default to manual order, original handoffs and previous budgets unless they opt in. Dashboard choices are explicitly included in newly queued requests.
+
 ## Current remote workflow and dashboard
 
 The queue defaults to one running target per browser session. Select 2 or 3 concurrent targets under Scope & scanning or Settings → Pipeline & modules for new jobs. The Space has a global cap of three jobs; existing jobs keep their queued limit. Jobs from the same session respect the smallest limit among active jobs. Distinct hostnames can overlap, while endpoints on the same hostname are serialized across sessions so per-host module request rates are not multiplied. Each target’s modules remain ordered so discovery results are available to later stages.

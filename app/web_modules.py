@@ -184,7 +184,7 @@ def command(module, target, host, agent, report, delay):
     raise ValueError("Unknown web module")
 
 
-async def run_web_module(module, url, host, agent, delay=1.5, discovered=None, inputs=None):
+async def run_web_module(module, url, host, agent, delay=1.5, discovered=None, inputs=None, profile="current"):
     if module not in MODULES or not in_host(url, host):
         raise ValueError("Invalid module or out-of-scope web target")
     if module == "idor-forge":
@@ -192,11 +192,11 @@ async def run_web_module(module, url, host, agent, delay=1.5, discovered=None, i
         return await run(url, host, agent, delay, inputs)
     if module in FINAL_MODULES:
         from .final_modules import run
-        return await run(module, url, host, agent, delay, inputs)
+        return await run(module, url, host, agent, delay, inputs, profile=profile)
     if module in ("wapiti", "retirejs"):
         from . import client_modules
         if module == "retirejs":
-            return await client_modules.retirejs(url, host, agent, delay, discovered or [])
+            return await client_modules.retirejs(url, host, agent, delay, discovered or [], **({"profile": profile} if profile != "current" else {}))
         return await client_modules.wapiti(url, host, agent, delay)
     target, evidence = url, ""
     if module == "testssl" and urlsplit(url).scheme != "https":

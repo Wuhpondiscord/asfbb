@@ -19,6 +19,8 @@ from .review import ACTIVE_MODULES, review, choose_arjun_target, choose_dalfox_t
 from . import config
 from .concurrency import dispatch, module_slot
 from .module_inputs import ModuleInputs
+from .planning import plan as build_pipeline_plan, page_target, assessed_urls
+from .coverage import profile as coverage_settings
 from .web_modules import MODULES as WEB_MODULES, run_web_module
 
 from . import nuclei_catalog
@@ -95,6 +97,9 @@ class PipelineOptions(BaseModel):
     zap_endpoint_limit: int = Field(default=config.ZAP_ENDPOINT_LIMIT_DEFAULT, ge=1, le=config.ZAP_ENDPOINT_LIMIT_MAX)
     request_budget: int = Field(default=config.ZAP_REQUEST_BUDGET_DEFAULT, ge=1, le=config.ZAP_REQUEST_BUDGET_MAX)
     discovery_first: bool = True
+    order_mode: Literal["manual", "guided"] = "manual"
+    reuse_discovery: bool = False
+    coverage_profile: Literal["current", "quick", "balanced", "thorough"] = "current"
     parallel_jobs: int = Field(default=config.PARALLEL_JOBS_DEFAULT, ge=1, le=config.PARALLEL_JOBS_MAX)
 
 class ScanRequest(BaseModel):
@@ -125,6 +130,23 @@ async def shutdown():
 @app.get("/")
 async def index():
     return FileResponse("/app/app/index.html")
+
+class PipelinePlanRequest(BaseModel):
+    modules: list[str] = Field(min_length=1, max_length=30)
+    order_mode: Literal["manual", "guided"] = "manual"
+    reuse_discovery: bool = False
+    coverage_profile: Literal["current", "quick", "balanced", "thorough"] = "current"
+
+
+@app.post("/api/pipeline/plan", dependencies=[Depends(authorize)])
+async def pipeline_plan(payload: PipelinePlanRequest):
+    try:
+        result = build_pipeline_plan(payload.modules, payload.order_mode, payload.reuse_discovery)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return {**result, "coverage_profile": payload.coverage_profile,
+            "budgets": coverage_settings(payload.coverage_profile)}
+
 
 @app.get("/api/nuclei/defaults", dependencies=[Depends(authorize)])
 async def nuclei_template_defaults():
@@ -306,6 +328,8 @@ def remove_account(account_id: str, request: Request):
 async def create_scan(spec: ScanRequest, request: Request):
     if not spec.modules or len(spec.modules) != len(set(spec.modules)) or not set(spec.modules).issubset(({"zap-passive","katana","nuclei","gau","httpx"} | ACTIVE_MODULES)):
         raise HTTPException(422, "Invalid or duplicate pipeline modules")
+    execution_plan = build_pipeline_plan(spec.modules, spec.options.order_mode, spec.options.reuse_discovery)
+    spec = spec.model_copy(update={"modules": execution_plan["effective"]})
     if "nuclei" in spec.modules:
         selection = spec.options.nuclei
         try:
@@ -340,6 +364,8 @@ async def create_scan(spec: ScanRequest, request: Request):
                 and existing.get("asset_id") == spec.asset_id
                 and existing.get("status") in ("queued", "running")
                 and existing.get("modules") == spec.modules
+                and existing.get("options", {}).get("coverage_profile", "current") == spec.options.coverage_profile
+                and existing.get("options", {}).get("reuse_discovery", False) == spec.options.reuse_discovery
                 and not (spec.options.inputs.source_text or spec.options.inputs.sbom_text or spec.options.inputs.llm_path
                          or spec.options.inputs.idor_path or spec.options.inputs.idor_values)
                 and existing.get("options", {}).get("inputs", {}).get("api_target", False) == spec.options.inputs.api_target):
@@ -350,9 +376,11 @@ async def create_scan(spec: ScanRequest, request: Request):
     recorded_options["nuclei"]["custom_templates"] = [
         "[inline template]" for _ in spec.options.nuclei.custom_templates]
     jobs[identifier] = {"owner": request.state.sid, "id": identifier, "asset_id": spec.asset_id, "target": url,
-                        "status": "queued", "alerts": [], "error": None, "created": time.time(),
+                        "status": "queued", "plan": execution_plan, "alerts": [], "error": None, "created": time.time(),
                         "request_count": 0, "cancelled": False, "modules": spec.modules, "endpoints": [], "pipeline": {}, "reviews": [], "probes": [], "options": recorded_options, "progress": 0, "stage": "queued"}
-    log_event(jobs[identifier], "queued", modules=spec.modules, parallel_jobs=spec.options.parallel_jobs)
+    log_event(jobs[identifier], "queued", modules=spec.modules, parallel_jobs=spec.options.parallel_jobs,
+              order_mode=spec.options.order_mode, coverage_profile=spec.options.coverage_profile,
+              requested_modules=execution_plan["requested"], plan_warnings=execution_plan["warnings"])
     # Public scan results are ephemeral.
     await queue.put((identifier, spec))
     return {"id": identifier, "status": "queued"}
@@ -522,8 +550,15 @@ async def run_scan_job(identifier, spec):
                         endpoints = list(dict.fromkeys(endpoints + result["endpoints"]))[:spec.options.endpoint_limit]
                         job["endpoints"] = endpoints[1:]
                     elif module == "katana":
-                        result = await katana(url, host, spec.user_agent, spec.options.katana_depth,
-                                          spec.options.endpoint_limit)
+                        if spec.options.reuse_discovery:
+                            log_event(job, "data_handoff", module=module, data="URL inventory to crawl seeds",
+                                      available_urls=len(endpoints))
+                            result = await katana(url, host, spec.user_agent, spec.options.katana_depth,
+                                                  spec.options.endpoint_limit, seed_urls=endpoints,
+                                                  coverage_profile=spec.options.coverage_profile)
+                        else:
+                            result = await katana(url, host, spec.user_agent, spec.options.katana_depth,
+                                                  spec.options.endpoint_limit)
                         for discovered in result["endpoints"]:
                             endpoint_sources.setdefault(discovered, []).append("katana")
                         endpoints = list(dict.fromkeys(endpoints + result["endpoints"]))[:spec.options.endpoint_limit]
@@ -544,7 +579,9 @@ async def run_scan_job(identifier, spec):
                                 headers["Cookie"] = profile["cookie"]
                         async with httpx.AsyncClient(timeout=15, follow_redirects=False,
                                                      trust_env=False, proxy=ZAP_URL, verify=False) as client:
-                            for candidate in endpoints[:spec.options.zap_endpoint_limit]:
+                            zap_urls = (assessed_urls(url, endpoints, job.get("probes", []))
+                                    if spec.options.reuse_discovery else endpoints)
+                            for candidate in zap_urls[:spec.options.zap_endpoint_limit]:
                                 if job["cancelled"] or job["request_count"] >= spec.options.request_budget:
                                     break
                                 if not in_host(candidate, host):
@@ -621,12 +658,22 @@ async def run_scan_job(identifier, spec):
                         except (ValueError, httpx.HTTPError) as exc:
                             raise ValueError("Nuclei template download failed: " + str(exc)[:160])
                         result = await nuclei(
-                            url, host, spec.user_agent, endpoints,
+                            url, host, spec.user_agent,
+                            assessed_urls(url, endpoints, job.get("probes", [])) if spec.options.reuse_discovery else endpoints,
                             selection.default_ids, remote, selection.custom_templates)
                         job["alerts"].extend(result["alerts"])
                     elif module in WEB_MODULES:
+                        module_url = (page_target(url, job.get("probes", [])) if
+                                      spec.options.reuse_discovery and module in ("nikto", "wpscan", "wapiti", "retirejs")
+                                      else url)
+                        if module_url != url:
+                            log_event(job, "data_handoff", module=module, data="Observed live page",
+                                      selected_url=module_url)
+                        profile_kwargs = ({"profile": spec.options.coverage_profile}
+                                          if spec.options.coverage_profile != "current" else {})
                         result = await run_web_module(
-                            module, url, host, spec.user_agent, spec.delay_seconds, endpoints, spec.options.inputs)
+                            module, module_url, host, spec.user_agent, spec.delay_seconds,
+                            endpoints, spec.options.inputs, **profile_kwargs)
                         job["reviews"].append(result)
                         job["alerts"].extend(result.get("alerts", []))
                         job["probes"].extend(result.get("probes", []))
@@ -641,13 +688,17 @@ async def run_scan_job(identifier, spec):
                             endpoints = endpoints[:spec.options.endpoint_limit]
                             job["endpoints"] = endpoints[1:]
                     elif module in ACTIVE_MODULES:
-                        review_url = (choose_arjun_target(url, endpoints, host)
+                        review_url = (choose_arjun_target(
+                                          page_target(url, job.get("probes", [])) if spec.options.reuse_discovery else url,
+                                          assessed_urls(url, endpoints, job.get("probes", [])) if spec.options.reuse_discovery else endpoints, host)
                                       if module == "arjun" else
                                       choose_dalfox_target(url, job.get("parameters", []), host)
                                       if module == "dalfox" else
                                       choose_sqlmap_target(url, endpoints, job.get("parameters", []), host)
                                       if module == "sqlmap" else url)
-                        result = await review(module, review_url, host)
+                        profile_kwargs = ({"profile": spec.options.coverage_profile}
+                                          if spec.options.coverage_profile != "current" else {})
+                        result = await review(module, review_url, host, **profile_kwargs)
                         job["reviews"].append(result)
                         if module == "dalfox":
                             job["alerts"].extend(result.get("findings", []))
@@ -716,6 +767,11 @@ async def run_scan_job(identifier, spec):
                                    "providers": result.get("providers", [])}
                 if module == "dalfox":
                     diagnostics["coverage"] = result.get("metadata", {})
+                if result.get("coverage") is not None and module != "gau":
+                    diagnostics["coverage_budget" if module == "dalfox" else "coverage"] = result["coverage"]
+                if result.get("seed_count") is not None:
+                    diagnostics["crawl_seeds"] = result["seed_count"]
+                diagnostics["coverage_profile"] = spec.options.coverage_profile
                 if result.get("deadline_seconds") is not None:
                     diagnostics["deadline_seconds"] = result["deadline_seconds"]
                 if result.get("target") and module in ("dalfox", "arjun", "sqlmap"):

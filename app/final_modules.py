@@ -10,6 +10,7 @@ from urllib.parse import urljoin, urlsplit
 from .pipeline import execute
 from .web_modules import alert, same_origin, read_report
 from .module_inputs import ModuleInputs
+from .coverage import profile as coverage_settings
 
 MODULES = {"trufflehog", "amass", "depscan", "trivy", "kiterunner", "osv-scanner", "garak", "nettacker"}
 CACHE = Path("/app/data/scanner-cache")
@@ -110,7 +111,8 @@ async def prepare_database(module):
     return status == "completed" and ready.is_file(), diagnostics(rows) or "Vulnerability database preparation did not complete"
 
 
-async def run(module, url, host, agent, delay, inputs=None):
+async def run(module, url, host, agent, delay, inputs=None, profile="current"):
+    settings = coverage_settings(profile)
     values = inputs if isinstance(inputs, ModuleInputs) else ModuleInputs(**(inputs or {}))
     if module == "trufflehog" and not values.source_text.strip():
         return skipped(module, url, "Requires supplied source text; a URL is not a filesystem input")
@@ -162,9 +164,9 @@ async def run(module, url, host, agent, delay, inputs=None):
                 reason = "Application-only SBOM profile; smaller 2024+ advisory database; no source builds or OS reachability"
             deadline = 90
         elif module == "amass":
-            args = ["/usr/local/bin/amass", "enum", "-passive", "-d", host, "-timeout", "1",
+            args = ["/usr/local/bin/amass", "enum", "-passive", "-d", host, "-timeout", str(settings["amass_minutes"]),
                     "-dir", str(root / "state"), "-o", str(root / "hosts.txt"), "-nocolor"]
-            deadline = 65
+            deadline = settings["amass_timeout"]
             reason = "HF standalone-compatible Amass 4.2.0 passive profile; discovered names are inventory, never auto-scanned"
         elif module == "kiterunner":
             dictionary = root / "routes.txt"

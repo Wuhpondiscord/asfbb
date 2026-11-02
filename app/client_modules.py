@@ -3,6 +3,7 @@ import asyncio
 import json
 import re
 import tempfile
+import time
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
@@ -10,6 +11,7 @@ from urllib.parse import urljoin, urlsplit
 import httpx
 
 from . import config
+from .coverage import profile as coverage_settings
 from .pipeline import execute
 from .scope import public_host
 from .web_modules import same_origin, read_report, alert
@@ -23,8 +25,10 @@ async def fetch_sample(url, agent, maximum):
 
 
 class ScriptInventory(HTMLParser):
-    def __init__(self, target):
+    def __init__(self, target, maximum=None):
         super().__init__()
+        self.maximum = maximum or config.RETIRE_MAX_FILE_BYTES
+        self.inline_oversized = 0
         self.target, self.urls, self.inline = target, [], []
         self.current = None
         self.inline_bytes = 0
@@ -46,15 +50,17 @@ class ScriptInventory(HTMLParser):
             self.current = []
 
     def handle_data(self, data):
-        if self.current is not None and self.inline_bytes < config.RETIRE_MAX_FILE_BYTES:
+        if self.current is not None and self.inline_bytes < self.maximum * 16:
             self.current.append(data)
             self.inline_bytes += len(data.encode("utf-8"))
 
     def handle_endtag(self, tag):
         if tag == "script" and self.current is not None:
             code = "".join(self.current).encode("utf-8")
-            if code.strip() and len(code) <= config.RETIRE_MAX_FILE_BYTES:
+            if code.strip() and len(code) <= self.maximum:
                 self.inline.append(code)
+            elif code.strip():
+                self.inline_oversized += 1
             self.current = None
 
 
@@ -90,29 +96,59 @@ def parse_retire(report, mapping):
     return results[:config.WEB_FINDINGS_LIMIT]
 
 
-async def retirejs(url, host, agent, delay, discovered):
+async def retirejs(url, host, agent, delay, discovered, profile="current"):
+    settings = coverage_settings(profile)
+    limit = config.RETIRE_MAX_FILES if profile == "current" else settings["retire_files"]
+    maximum = config.RETIRE_MAX_FILE_BYTES if profile == "current" else settings["retire_bytes"]
+    attempts_limit = limit if profile == "current" else settings["retire_attempts"]
     reasons, samples = [], []
-    parser = ScriptInventory(url)
+    parser = ScriptInventory(url, maximum)
+    started = time.monotonic()
+    coverage = {"profile": profile, "max_files": limit, "max_file_bytes": maximum,
+                "attempted_scripts": 0, "oversized": 0, "fetch_failures": 0,
+                "inline_available": 0, "external_available": 0}
+
+    async def sample(candidate, cap):
+        remaining = settings["retire_sampling_seconds"] - (time.monotonic() - started)
+        if remaining <= 0:
+            raise asyncio.TimeoutError()
+        return await asyncio.wait_for(fetch_sample(candidate, agent, cap), remaining)
+
     try:
-        body, content_type, page_url = await fetch_sample(url, agent, config.WEB_PREFLIGHT_MAX_BYTES)
-        parser = ScriptInventory(page_url)
+        page_cap = config.WEB_PREFLIGHT_MAX_BYTES if profile == "current" else maximum
+        body, content_type, page_url = await sample(url, page_cap)
+        parser = ScriptInventory(page_url, maximum)
         if "html" in content_type or body.lstrip().lower().startswith((b"<!doctype html", b"<html")):
             parser.feed(body.decode("utf-8", "replace"))
         elif "javascript" in content_type or urlsplit(url).path.lower().endswith(".js"):
             samples.append((page_url, body))
     except (FetchProblem, httpx.HTTPError, asyncio.TimeoutError, ValueError) as exc:
         reasons.append("Page sampling: " + (str(exc) if isinstance(exc, FetchProblem) else exc.__class__.__name__))
+        coverage["fetch_failures"] += 1
     candidates = list(dict.fromkeys(parser.urls + [
         item for item in discovered if isinstance(item, str) and same_origin(item, url) and
         urlsplit(item).path.lower().endswith((".js", ".mjs"))]))
-    limit = config.RETIRE_MAX_FILES
-    selected = candidates[:max(0, limit - len(samples))]
-    if len(selected) < len(candidates):
-        reasons.append("JavaScript URL sample limited to " + str(len(selected)))
-    for candidate in selected:
+    already = {source for source, _ in samples}
+    candidates = [candidate for candidate in candidates if candidate not in already]
+    coverage["eligible_files"] = len(candidates) + len(parser.inline) + len(samples)
+    coverage.update(external_available=len(candidates), inline_available=len(parser.inline),
+                    oversized=parser.inline_oversized)
+    # Keep a mix of inline and external code. Cheap inline samples should not
+    # be crowded out by several oversized remote bundles.
+    initial_inline = 0 if profile == "current" else min(len(parser.inline), limit // 2)
+    samples.extend((parser.target, body) for body in parser.inline[:initial_inline])
+    attempted = 0
+    for candidate in candidates:
+        if len(samples) >= limit or attempted >= attempts_limit:
+            break
+        if time.monotonic() - started + max(config.REQUEST_DELAY_MIN, float(delay)) >= settings["retire_sampling_seconds"]:
+            reasons.append("JavaScript sampling time budget reached")
+            break
         await asyncio.sleep(max(config.REQUEST_DELAY_MIN, float(delay)))
+        attempted += 1
+        coverage["attempted_scripts"] = attempted
         try:
-            body, content_type, sampled_url = await fetch_sample(candidate, agent, config.RETIRE_MAX_FILE_BYTES)
+            body, content_type, sampled_url = await sample(candidate, maximum)
             if "html" in content_type or body.lstrip().lower().startswith((b"<!doctype html", b"<html")):
                 raise FetchProblem("HTML returned instead of JavaScript")
             if "javascript" not in content_type and not urlsplit(candidate).path.lower().endswith((".js", ".mjs")):
@@ -120,15 +156,29 @@ async def retirejs(url, host, agent, delay, discovered):
             if body:
                 samples.append((sampled_url, body))
         except (FetchProblem, httpx.HTTPError, asyncio.TimeoutError, ValueError) as exc:
-            reasons.append("Script sampling: " + (str(exc) if isinstance(exc, FetchProblem) else exc.__class__.__name__))
+            detail = str(exc) if isinstance(exc, FetchProblem) else exc.__class__.__name__
+            if "byte limit" in detail:
+                coverage["oversized"] += 1
+            else:
+                coverage["fetch_failures"] += 1
+            reasons.append("Script sampling: " + detail)
+    remaining_inline = parser.inline[initial_inline:]
     inline_limit = max(0, limit - len(samples))
-    samples.extend((parser.target, body) for body in parser.inline[:inline_limit])
-    if len(parser.inline) > inline_limit:
+    samples.extend((parser.target, body) for body in remaining_inline[:inline_limit])
+    omitted_external = max(0, len(candidates) - attempted)
+    omitted_inline = max(0, len(remaining_inline) - inline_limit)
+    if omitted_external:
+        reasons.append("JavaScript URL sample limited to " + str(attempted))
+    if omitted_inline:
         reasons.append("Inline JavaScript sample limited")
+    if parser.inline_oversized:
+        reasons.append("Oversized inline JavaScript excluded")
+    coverage.update(sampled_files=len(samples), omitted_external=omitted_external,
+                    omitted_inline=omitted_inline)
     if not samples:
         reason = "; ".join(reasons) or "No same-origin or inline JavaScript available"
         return {"status": "skipped", "source": "retirejs", "alerts": [], "target": url,
-                "reason": reason, "output": "Retire.js skipped: " + reason}
+                "reason": reason, "coverage": coverage, "output": "Retire.js skipped: " + reason}
     with tempfile.TemporaryDirectory(prefix="asfb-retirejs-") as tmp:
         root = Path(tmp)
         assets = root / "assets"
@@ -167,13 +217,17 @@ async def retirejs(url, host, agent, delay, discovered):
         reasons.append("Retire.js reported scanner errors")
         if status in ("completed", "findings"):
             status = "partial" if findings else "failed"
+    execution_state = status
     if reasons and status in ("completed", "findings"):
         status = "partial"
+    coverage["engine_status"] = execution_state
+    coverage["coverage_limited"] = bool(reasons)
     reasons.extend(diagnostic)
     reasons.append("Bounded JavaScript sample using the image-bundled advisory snapshot")
     return {"status": status, "source": "retirejs", "target": url, "alerts": findings,
-            "sampled_files": len(samples), "reason": "; ".join(reasons)[:500],
-            "output": f"Retire.js: {len(samples)} sampled files; {len(findings)} unverified advisory matches; status: {status}"}
+            "sampled_files": len(samples), "coverage": coverage,
+            "reason": "; ".join(dict.fromkeys(reasons))[:500],
+            "output": f"Retire.js: engine {execution_state}; {len(samples)}/{coverage['eligible_files']} eligible files sampled; {len(findings)} unverified advisory matches; coverage: {status}"}
 
 
 def parse_wapiti(report, target):

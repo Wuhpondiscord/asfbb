@@ -27,6 +27,13 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
   else if(u.pathname==='/api/accounts')data=[];
   else if(u.pathname==='/api/scans')data=jobs;
   else if(u.pathname==='/api/logs')data={events,total:3,returned:3,truncated:false};
+  else if(u.pathname==='/api/pipeline/plan'){
+   const request=route.request().postDataJSON();
+   const effective=request.order_mode==='manual'?request.modules:['gau',...request.modules.filter(m=>m!=='gau')].filter(m=>request.modules.includes(m));
+   data={mode:request.order_mode,effective,requested:request.modules,changed:JSON.stringify(effective)!==JSON.stringify(request.modules),
+         warnings:request.order_mode==='manual'?['Manual fixture ordering warning']:[],handoffs:[{from:'gau',to:'katana',data:'URL inventory',available:true}],
+         coverage_profile:request.coverage_profile,budgets:{retire_files:8,retire_bytes:2097152,dalfox_scan_seconds:60,dalfox_payloads:12,amass_timeout:95}};
+  }
   else if(u.pathname==='/api/nuclei/defaults')data={templates:[{id:'technology-headers'}],default_ids:['technology-headers']};
   return route.fulfill({contentType:'application/json',headers:{'X-ASFB-Session':'offline-browser-session'},body:JSON.stringify(data)});
  });
@@ -45,6 +52,21 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
  await page.locator('#moduleSearch').fill('');
  await page.locator('button[onclick="enableFullPipeline()"]').click();
  assert.equal(await page.locator('.module-card input:checked').count(),23);
+ assert.equal(await page.locator('#pipelineMode').inputValue(),'guided');
+ assert.equal(await page.locator('#coverageProfile').inputValue(),'balanced');
+ await page.locator('#pipelineMode').selectOption('manual');
+ const reversed=await page.evaluate(()=>enabledModules().slice().reverse().join(', '));
+ await page.locator('#settingsOrder').fill(reversed);
+ await page.waitForFunction(()=>document.querySelector('#pipelinePlanSummary').textContent.includes('Manual execution order'));
+ assert.equal(await page.evaluate(()=>pipelineOptions().order_mode),'manual');
+ assert.equal(await page.evaluate(()=>el('stageOrder').value),reversed);
+ assert((await page.locator('#pipelinePlanSummary').textContent()).includes('Manual fixture ordering warning'));
+ await page.locator('#pipelineMode').selectOption('guided');
+ await page.locator('#coverageProfile').selectOption('thorough');
+ await page.waitForFunction(()=>document.querySelector('#pipelinePlanHint').textContent.includes('thorough'));
+ assert.equal(await page.evaluate(()=>pipelineOptions().coverage_profile),'thorough');
+ assert.equal(await page.evaluate(()=>pipelineOptions().reuse_discovery),true);
+ await page.locator('button[onclick="enableFullPipeline()"]').click();
  await page.locator('[data-settings="inputs"]').click();
  await page.locator('#moduleIdorPath').fill('/api/item');
  await page.locator('#moduleIdorBaseline').fill('known-id');
