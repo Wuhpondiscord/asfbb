@@ -51,7 +51,7 @@ def test_oversized_bundles_do_not_use_up_all_slots_before_later_small_scripts():
     assert result["status"] == "partial"  # Omitted bundles remain explicit coverage gaps.
 
 
-@pytest.mark.parametrize("name,minutes,deadline", [("quick", "1", 65), ("balanced", "1", 95), ("thorough", "2", 150)])
+@pytest.mark.parametrize("name,minutes,deadline", [("current", "1", 180), ("quick", "1", 180), ("balanced", "2", 300), ("thorough", "5", 600)])
 def test_amass_profile_leaves_time_for_internal_deadline_and_output_flush(name, minutes, deadline):
     async def execute(args, timeout):
         assert args[args.index("-timeout") + 1] == minutes

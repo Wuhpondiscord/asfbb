@@ -12,6 +12,10 @@ from .protocol_runner import bucket_target
 
 MODULES = {"graphw00f", "corsy", "takeover", "s3-review", "websocket", "vcs-artifacts"}
 DEADLINES = {"graphw00f": 100, "corsy": 40, "takeover": 35, "s3-review": 30, "websocket": 25, "vcs-artifacts": 35}
+# These stops successfully enforce configured scope/sampling policy.
+# Provider, DNS, transport, engine and time failures remain incomplete statuses.
+POLICY_STOPS = {"redirect_not_followed", "scope_blocked", "request_budget", "response_limit"}
+
 LABELS = {
     "vcs_metadata": ("Exposed VCS metadata candidate", "Medium"),
     "graphql_present": ("GraphQL metadata endpoint observed", "Informational"),
@@ -143,9 +147,13 @@ async def run(module, url, host, agent, delay, discovered=None, inputs=None):
                 "alerts": [], "reason": "No valid bounded protocol report; native diagnostics redacted",
                 "output": module + ": incomplete; no clean-scan claim"}
     findings = normalize(module, report, target)
-    if status == "completed" and report.get("status") in ("skipped", "partial", "failed"):
+    early_stop = (status == "completed" and report.get("status") == "partial"
+                  and report.get("stop_reason") in POLICY_STOPS)
+    if early_stop:
+        status = "findings" if findings else "completed"
+    if not early_stop and status == "completed" and report.get("status") in ("skipped", "partial", "failed"):
         status = report["status"]
-    if status == "completed" and report.get("status") != "completed":
+    if not early_stop and status == "completed" and report.get("status") != "completed":
         status = "partial"
     if status == "completed" and findings:
         status = "findings"
@@ -167,8 +175,12 @@ async def run(module, url, host, agent, delay, discovered=None, inputs=None):
                   "s3-review": "S3 anonymous ListBucket max-keys=0 and ACL metadata; no object downloads or writes",
                   "websocket": "Two opening handshakes at most; no application frames or authenticated hijack testing",
                   "vcs-artifacts": "Five GETs: missing-path control and four structured VCS metadata checks; no reconstruction or history"}[module]
+    if early_stop:
+        reason = "Early stop: " + reason + "; policy enforced; coverage is incomplete"
     confirmed_graphql = module == "graphw00f" and any(item["rule_id"] == "graphql_present" for item in findings)
     return {"source": module, "target": target, "status": status, "alerts": findings, "metadata": metadata,
             "requests": requests, "deadline_seconds": DEADLINES[module], "reason": reason,
+            **({"early_stop": True, "stop_reason": report["stop_reason"], "coverage_complete": False}
+               if early_stop else {}),
             "endpoints": [target] if confirmed_graphql else [],
             "output": f"{module}: {len(findings)} observations; {requests} scoped HTTP requests; status: {status}; native context redacted"}

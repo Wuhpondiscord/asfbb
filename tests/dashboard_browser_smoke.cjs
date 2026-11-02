@@ -10,7 +10,7 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
  let html=fs.readFileSync('app/index.html','utf8');const now=Date.now()/1000;
  let builtinInfo={templates:[{id:'technology-headers'}],default_ids:['technology-headers']};
  const jobs=[
-  {id:'job-one',target:'https://alpha.example.org/',status:'running',created:now-20,stage:'idor-forge',progress:50,request_count:0,modules:['idor-forge'],pipeline:{'idor-forge':'running'},alerts:[],endpoints:[],stage_details:{}},
+  {id:'job-one',target:'https://alpha.example.org/',status:'running',created:now-20,stage:'idor-forge',progress:50,request_count:0,modules:['idor-forge'],pipeline:{'idor-forge':'running',amass:'completed'},alerts:[],endpoints:[],stage_details:{amass:{status:'completed',elapsed_ms:120000,early_stop:true,coverage_complete:false,stop_reason:'native_time_budget',reason:'Early stop: native time budget; coverage is incomplete'}}},
   {id:'job-two',target:'https://beta.example.org/',status:'partial',created:now-60,stage:'partial',progress:100,request_count:1,modules:['gau'],pipeline:{gau:'timeout'},alerts:[],endpoints:[],stage_details:{gau:{status:'timeout',elapsed_ms:12000,reason:'Common Crawl deadline',summary:'Partial archive coverage'}}},
   {id:'job-three',target:'https://gamma.example.org/',status:'queued',created:now-10,stage:'queued',progress:0,request_count:0,modules:['zap-passive'],pipeline:{},alerts:[],endpoints:[]}
  ];
@@ -127,6 +127,8 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
  assert.equal(await page.locator('#settingsParallel').inputValue(),'3');
  assert.equal(await page.evaluate(()=>pipelineOptions().parallel_jobs),3);
  await page.locator('#tab-jobs').click();
+ assert((await page.locator('#scans').textContent()).includes('amass: completed · early stop'));
+ assert((await page.locator('#scans').textContent()).includes('amass · completed · early stop'));
  await page.locator('#jobSearch').fill('beta');
  assert.equal(await page.locator('#scans > details').count(),1);
  assert((await page.locator('#scans').textContent()).includes('beta.example.org'));
@@ -151,6 +153,12 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
  await page.locator('#logLevel').selectOption('error');
  assert.equal(await page.locator('#fullLogs > details').count(),1);
  await page.locator('button[onclick="clearLogFilters()"]').click();
+ await page.evaluate(()=>{
+  logEvents.push({event_id:'early-stop-ui',time:Date.now()/1000,job_id:'job-one',target:'https://alpha.example.org/',event:'stage_finished',module:'amass',level:'info',status:'completed',diagnostics:{early_stop:true,stop_reason:'native_time_budget',coverage_complete:false}});
+  renderLogs();
+ });
+ assert((await page.locator('#fullLogs > details > summary').allTextContents()).some(text=>text.includes('early stop')));
+ await page.evaluate(()=>{logEvents=logEvents.filter(e=>e.event_id!=='early-stop-ui');renderLogs();});
  await page.locator('#pauseLogs').click();
  assert.equal(await page.locator('#pauseUpdates').textContent(),'Resume live updates');
  assert.equal(await page.locator('#pauseLogs').textContent(),'Resume live updates');

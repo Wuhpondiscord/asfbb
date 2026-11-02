@@ -849,6 +849,11 @@ async def run_scan_job(identifier, spec):
                 elapsed_ms = round((time.monotonic() - started_at) * 1000)
                 job.setdefault("stage_details", {})[module] = {"status": result["status"], "elapsed_ms": elapsed_ms, "reason": str(result.get("reason", ""))[:250], "summary": summary, "counts": counts}
                 diagnostics = {}
+                if result.get("early_stop") is True:
+                    stop_details = {"early_stop": True, "stop_reason": result.get("stop_reason"),
+                                    "coverage_complete": False}
+                    job["stage_details"][module].update(stop_details)
+                    diagnostics.update(stop_details)
                 if module == "gau":
                     diagnostics = {"coverage": result.get("coverage"), "mode": result.get("mode"),
                                    "providers": result.get("providers", [])}

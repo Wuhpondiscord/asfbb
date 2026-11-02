@@ -185,10 +185,14 @@ The extended-reuse checkbox passes a bounded, exact-origin archive URL sample in
 
 | Coverage | Retire.js sample | Dalfox payloads / scan / process cap | Amass internal / process cap |
 | --- | --- | --- | --- |
-| Previous limits | 4 files, 512 KiB each | 30 / 30s / 65s | 1 minute / 65s |
-| Quick | 4 files, 512 KiB each | 8 / 30s / 60s | 1 minute / 65s |
-| Balanced | 8 files, 2 MiB each | 12 / 60s / 90s | 1 minute / 95s |
-| Thorough | 16 files, 4 MiB each | 30 / 120s / 150s | 2 minutes / 150s |
+| Legacy API profile | 4 files, 512 KiB each | 30 / 30s / 65s | 1 minute / 180s |
+| Quick | 4 files, 512 KiB each | 8 / 30s / 60s | 1 minute / 180s |
+| Balanced | 8 files, 2 MiB each | 12 / 60s / 90s | 2 minutes / 300s |
+| Thorough | 16 files, 4 MiB each | 30 / 120s / 150s | 5 minutes / 600s |
+
+Amass consults external passive data sources even for one selected hostname. Initialization occurs before its native enumeration timer, and shutdown/output flushing can take additional time, so the process cap includes extra headroom. A recognized native `context deadline exceeded` exit is **Completed · early stop**, with incomplete inventory coverage explicitly recorded. A forced process timeout, crash or missing binary remains a failure/timeout; elapsed time alone never proves an intentional stop.
+
+Scoped protocol profiles also report **Completed · early stop** (or Findings with the same label) when a valid report confirms a deliberate redirect, scope, request-count or response-sample stop. These outcomes do not degrade the overall job, but retain `early_stop`, `stop_reason` and `coverage_complete: false` in stage details/logs. Transport/DNS/engine failures, HTTP 429 and deadlines retain their incomplete status. Completion describes execution of the configured policy, not exhaustive coverage or absence of vulnerabilities.
 
 Retire.js balances inline and external samples, tries later candidates after failed or oversized bundles, and records eligible/sampled/omitted counts separately from the scanner engine status. Sampling also has overall time and attempt budgets. A completed engine with excluded resources still reports partial coverage. Larger profiles increase time and requests; they do not guarantee that external providers or targets will answer. No timeout or sampling gap is converted into a clean result.
 

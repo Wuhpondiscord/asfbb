@@ -31,6 +31,18 @@ def diagnostics(rows):
     return ""
 
 
+def amass_internal_stop(rows, status):
+    """Recognize the pinned CLI's context deadline, never an outer forced kill."""
+    if status not in ("completed", "failed"):
+        return False
+    messages = [row.removeprefix("[stderr] ").strip() for row in rows]
+    if "context deadline exceeded" not in messages:
+        return False
+    exits = [row for row in messages if row.startswith("[diagnostic] Process exit code:")]
+    return (status == "completed" and not exits or
+            status == "failed" and exits == ["[diagnostic] Process exit code: 1"])
+
+
 def json_rows(rows):
     found = []
     for row in rows:
@@ -181,6 +193,7 @@ async def run(module, url, host, agent, delay, inputs=None, profile="current"):
         report, findings, hosts, endpoints, probes = None, [], [], [], []
         reason = ""
         verification = None
+        early_stop = False
         if module == "trufflehog":
             source = root / "source"
             source.mkdir()
@@ -277,6 +290,9 @@ async def run(module, url, host, agent, delay, inputs=None, profile="current"):
                 if re.fullmatch(r"[a-z0-9.-]{1,253}", name) and (name == host or name.endswith("." + host)):
                     hosts.append(name)
             hosts = sorted(set(hosts))[:100]
+            if amass_internal_stop(rows, status):
+                status, early_stop = "completed", True
+                reason += "; Early stop: native enumeration time budget reached; inventory coverage is incomplete"
         elif module == "kiterunner":
             # Kiterunner prints structured zerolog hit records; retain only scoped URLs.
             for item in json_rows(rows):
@@ -341,6 +357,8 @@ async def run(module, url, host, agent, delay, inputs=None, profile="current"):
                        for state in ("verified", "unverified", "unknown", "not_attempted")) + f"; status: {status}")
         return {"source": module, "target": url, "status": status, "alerts": findings,
                 **({"verification": verification} if verification is not None else {}),
+                **({"early_stop": True, "stop_reason": "native_time_budget", "coverage_complete": False}
+                   if early_stop else {}),
                 "hosts": hosts, "endpoints": endpoints, "probes": probes,
                 "deadline_seconds": deadline,
                 "reason": (reason + ("; " + diag if diag else ""))[:700],
