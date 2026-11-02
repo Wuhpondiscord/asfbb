@@ -144,3 +144,8 @@ def test_invalid_profile_or_mode_is_rejected():
     for options in ({"coverage_profile": "unlimited"}, {"order_mode": "guess"}):
         with pytest.raises(ValidationError):
             main.PipelineOptions(**options)
+
+def test_equivalent_root_urls_do_not_consume_the_extra_archive_seed_slot():
+    assert planning.crawl_seeds("https://example.org", [
+        "https://example.org/", "https://example.org/#top", "https://example.org:443/",
+        "https://example.org/help"], maximum=2) == ["https://example.org", "https://example.org/help"]

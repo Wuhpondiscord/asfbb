@@ -69,7 +69,18 @@ def crawl_seeds(primary, inventory, maximum=3):
                   and not urlsplit(u).path.lower().endswith(STATIC_EXTENSIONS)
                   and not any(c in u for c in "\r\n\x00")]
     candidates.sort(key=lambda u: (bool(urlsplit(u).query), len(urlsplit(u).path)))
-    return list(dict.fromkeys([primary] + candidates))[:maximum]
+    selected, seen = [], set()
+    for candidate in [primary] + candidates:
+        parts = urlsplit(candidate)
+        key = (parts.scheme, parts.hostname, parts.port or (443 if parts.scheme == "https" else 80),
+               parts.path or "/", parts.query)
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(candidate)
+        if len(selected) >= maximum:
+            break
+    return selected
 
 
 def page_target(primary, probes):
