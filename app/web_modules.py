@@ -41,7 +41,7 @@ class WordPressEvidence(HTMLParser):
         if (tag == "meta" and str(attrs.get("name", "")).lower() == "generator"
                 and re.match(r"wordpress(?:\s|$)", str(attrs.get("content", "")), re.I)):
             self.evidence.append("WordPress generator meta tag")
-            self.install_url = self.install_url or self.target
+            self.install_url = self.install_url or urlsplit(self.target)._replace(query="", fragment="").geturl()
         if tag not in ("link", "script"):
             return
         value = attrs.get("href" if tag == "link" else "src")

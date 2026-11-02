@@ -18,12 +18,27 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
   {event_id:'e2',time:now-8,job_id:'job-two',target:jobs[1].target,event:'stage_finished',module:'gau',status:'timeout',level:'warning',elapsed_ms:12000,reason:'Common Crawl deadline',diagnostics:{providers:[{provider:'commoncrawl',status:'timeout'}]}},
   {event_id:'e3',time:now-5,job_id:'job-one',target:jobs[0].target,event:'stage_exception',module:'idor-forge',level:'error',error_type:'ExampleError'}
  ];
+ const importedAssets=[{id:'a',name:'https://alpha.example.org/',description:'Example authorized target',compatibility:'web',type:'URL',bounty:true,max_severity:'high',resolved_reports:0}];
+ function addImported(id,name,format){
+  importedAssets.push({id,name,description:'Imported fixture',compatibility:'web',type:'URL',bounty:false,max_severity:'unknown',resolved_reports:null});
+  return {imported:1,web:1,duplicates:0,format,asset_ids:[id],web_asset_ids:[id]};
+ }
  await page.route('**/*',async route=>{
   const u=new URL(route.request().url());
   assert.equal(u.hostname,'asfb.test','Unexpected live network request');
   let data={};
   if(u.pathname==='/')return route.fulfill({contentType:'text/html',body:html});
-  if(u.pathname==='/api/assets')data={assets:[{id:'a',name:'https://alpha.example.org/',description:'Example authorized target',compatibility:'web',type:'URL',bounty:true,max_severity:'high',resolved_reports:0}]};
+  if(u.pathname==='/api/assets')data={assets:importedAssets};
+  else if(u.pathname==='/api/import/text'){
+   const body=route.request().postDataJSON();
+   assert.equal(body.text,'https://single.example.org/search?q=test');assert.equal(body.format,'auto');
+   data=addImported('direct-url',body.text,'text');
+  }
+  else if(u.pathname==='/api/import'){
+   assert.equal(u.searchParams.get('format'),'auto');
+   assert(route.request().postDataBuffer().toString().includes('https://file.example.org/'));
+   data=addImported('file-url','https://file.example.org/','text');
+  }
   else if(u.pathname==='/api/accounts')data=[];
   else if(u.pathname==='/api/scans')data=jobs;
   else if(u.pathname==='/api/logs')data={events,total:3,returned:3,truncated:false};
@@ -39,6 +54,29 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
  });
  await page.goto('http://asfb.test/');
  await page.waitForFunction(()=>document.querySelector('#total').textContent==='1');
+ await page.locator('#formatHelpButton').hover();
+ assert(await page.getByRole('tooltip').isVisible());
+ assert((await page.getByRole('tooltip').textContent()).includes('JSONL'));
+ await page.locator('#formatHelpButton').focus();
+ await page.keyboard.press('Escape');
+ assert(!(await page.getByRole('tooltip').isVisible()));
+ await page.locator('#formatHelpButton').click();
+ assert(await page.getByRole('tooltip').isVisible());
+ await page.locator('#targetText').click();
+ assert(!(await page.getByRole('tooltip').isVisible()));
+ await page.locator('#targetText').fill('https://single.example.org/search?q=test');
+ await page.locator('#addTargets').click();
+ await page.waitForFunction(()=>document.querySelector('#total').textContent==='2');
+ assert.equal(await page.locator('#targetText').inputValue(),'');
+ assert(await page.evaluate(()=>selectedIds.has('direct-url')));
+ assert(await page.locator('#start').isDisabled());
+ await page.locator('#file').setInputFiles({name:'targets.txt',mimeType:'text/plain',buffer:Buffer.from('https://file.example.org/\n')});
+ await page.locator('#uploadTargets').click();
+ await page.waitForFunction(()=>document.querySelector('#total').textContent==='3');
+ assert(await page.evaluate(()=>selectedIds.has('file-url')));
+ assert.equal(await page.evaluate(()=>selectedIds.size),2);
+ assert(await page.locator('#start').isDisabled());
+
  const tabs=await page.locator('nav.tabs button').evaluateAll(nodes=>nodes.map(n=>n.id));
  assert.equal(tabs.at(-1),'tab-settings');
  assert.equal(await page.locator('#parallelJobs').inputValue(),'1');
@@ -116,6 +154,12 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
   for(const name of ['scope','jobs','logs','settings']){
    await page.locator('#tab-'+name).click();
    if(name==='settings')await page.locator('[data-settings="pipeline"]').click();
+   if(width===390&&name==='scope'){
+    await page.locator('#formatHelpButton').click();
+    assert(await page.getByRole('tooltip').isVisible());
+    assert(!(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth+1)));
+    await page.keyboard.press('Escape');
+   }
    const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth+1);
    if(overflow)console.error(await page.evaluate(()=>Array.from(document.querySelectorAll('body *')).filter(n=>{const r=n.getBoundingClientRect();return r.width&&r.right>window.innerWidth+1}).slice(0,30).map(n=>({tag:n.tagName,id:n.id,class:n.className,right:n.getBoundingClientRect().right,width:n.getBoundingClientRect().width}))));
    await page.screenshot({path:'ui-review/'+name+'-'+width+'.png',fullPage:true});

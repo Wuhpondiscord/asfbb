@@ -16,7 +16,10 @@ def command(module, url, host, profile="current"):
     if not in_host(url, host):
         raise ValueError("Review URL must stay on the selected exact host")
     if module == "ffuf":
-        return ["/usr/local/bin/ffuf", "-u", url.rstrip("/") + "/FUZZ",
+        parts = urlsplit(url)
+        discovery_url = urlunsplit(parts._replace(path=parts.path.rstrip("/") + "/FUZZ",
+                                                   query="", fragment=""))
+        return ["/usr/local/bin/ffuf", "-u", discovery_url,
                 "-w", "/app/app/wordlists/paths.txt", "-t", "1", "-rate", "1",
                 "-maxtime", "25", "-timeout", "5", "-noninteractive", "-json"]
     if module == "arjun":

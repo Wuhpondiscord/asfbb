@@ -5,6 +5,40 @@ sdk: docker
 app_port: 7860
 ---
 
+## Direct URLs and target-list imports
+
+Use **Scope & scanning → Import targets** to paste one URL, paste a list or upload a file. A question-mark button shows format examples on hover/focus and can be pinned with a click/tap. Escape or an outside click closes it.
+
+Supported formats are UTF-8 TXT URL lists (one target per line), standard CSV/TSV, HackerOne CSV exports, JSON strings/arrays/objects and JSONL/NDJSON. UTF-16 files with a BOM are also accepted. Common target headers include url, uri, target, host, hostname, domain, Asset name and asset_identifier. JSON may use a targets/urls/assets/scope/data wrapper. Plain hostnames use HTTPS. TXT lists ignore blank lines and # comment lines.
+
+Examples:
+
+```text
+https://example.org/search?q=test
+https://api.example.org/v1/
+example.net
+```
+
+```csv
+url,description
+https://example.org/,Main app
+```
+
+```json
+{"targets":["https://example.org/",{"url":"https://api.example.org/"}]}
+```
+
+```jsonl
+{"url":"https://example.org/"}
+{"url":"https://api.example.org/"}
+```
+
+Imports merge into the current browser session and reuse duplicate entries. URL query values are retained; fragments are ignored for requests and duplicate matching. Missing bounty/severity metadata stays unknown or ineligible rather than being assumed. Non-web scope entries from structured exports remain available for manual review.
+
+The importer accepts up to 2 MB and 3,000 targets per session, rejects credential-bearing URLs, and never fetches targets or starts scans. The optional **Select imported web targets** checkbox selects entries for review; existing policy and active-test confirmations still apply when queuing. Parsing malformed input is atomic: no partial batch is added. Public-host checks and the existing supported-port limits remain enforced at scan time.
+
+API: `POST /api/import/text` accepts `{"text":"https://example.org/","format":"auto"}`. The existing multipart `POST /api/import` supports filenames/content auto-detection and an optional `?format=text|csv|tsv|json|jsonl` override.
+
 ## Guided pipelines and coverage profiles
 
 The dashboard now defaults to **Guided** ordering and the **Balanced** coverage budget. Under Settings → Pipeline order & coverage, switch to **Manual** to preserve the exact comma-separated order. Guided mode reorders only enabled modules: URL discovery runs before URL consumers, HTTPX metadata is available before applicable page reviews, and Arjun runs before Dalfox/SQLmap. Missing modules are never automatically enabled. The preview and each job's stored plan show requested/effective order, handoffs and manual-order warnings.

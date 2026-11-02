@@ -19,6 +19,7 @@ from .review import ACTIVE_MODULES, review, choose_arjun_target, choose_dalfox_t
 from . import config
 from .concurrency import dispatch, module_slot
 from .module_inputs import ModuleInputs
+from .target_import import parse_targets, target_key, MAX_TARGETS
 from .planning import plan as build_pipeline_plan, page_target, assessed_urls
 from .coverage import profile as coverage_settings
 from .web_modules import MODULES as WEB_MODULES, run_web_module
@@ -252,20 +253,54 @@ async def health():
             "parallel_jobs_default": config.PARALLEL_JOBS_DEFAULT,
             "parallel_jobs_max": config.PARALLEL_JOBS_MAX}
 
+class TargetTextImport(BaseModel):
+    text: str = Field(min_length=1, max_length=2_000_000)
+    format: Literal["auto", "text", "csv", "tsv", "json", "jsonl"] = "auto"
+
+
+def import_targets_for_owner(parsed, owner):
+    owned = {target_key(asset): asset for asset in assets.values() if asset.get("owner") == owner}
+    selected, pending, duplicates = [], [], parsed["duplicates"]
+    prefix = uuid.uuid4().hex[:12]
+    for row in parsed["assets"]:
+        key = target_key(row)
+        if key in owned:
+            duplicates += 1
+            selected.append(owned[key])
+            continue
+        row = {**row, "id": prefix + "-" + row["id"], "owner": owner}
+        pending.append(row)
+        owned[key] = row
+        selected.append(row)
+    if len(owned) > MAX_TARGETS:
+        raise HTTPException(422, "This session would exceed 3000 imported targets; clear unused targets first")
+    for row in pending:
+        assets[row["id"]] = row
+    return {"imported": len(pending), "web": sum(row["compatibility"] == "web" for row in pending),
+            "duplicates": duplicates, "format": parsed["format"],
+            "asset_ids": [row["id"] for row in selected],
+            "web_asset_ids": [row["id"] for row in selected if row["compatibility"] == "web"]}
+
+
 @app.post("/api/import", dependencies=[Depends(authorize)])
-async def import_file(request: Request, file: UploadFile = File(...)):
+async def import_file(request: Request, file: UploadFile = File(...),
+                      format: Literal["auto", "text", "csv", "tsv", "json", "jsonl"] = "auto"):
     blob = await file.read(2_000_001)
     try:
-        rows = parse_csv(blob)
-    except (UnicodeDecodeError, ValueError) as exc:
+        parsed = parse_targets(blob, file.filename or "", format)
+    except (UnicodeError, ValueError) as exc:
         raise HTTPException(422, str(exc))
-    prefix = str(uuid.uuid4())[:8]
-    for r in rows:
-        r["id"] = prefix + "-" + r["id"]
-        r["owner"] = request.state.sid
-        assets[r["id"]] = r
-    # Keep public browser data ephemeral.
-    return {"imported": len(rows), "web": sum(r["compatibility"] == "web" for r in rows)}
+    return import_targets_for_owner(parsed, request.state.sid)
+
+
+@app.post("/api/import/text", dependencies=[Depends(authorize)])
+async def import_text(payload: TargetTextImport, request: Request):
+    try:
+        parsed = parse_targets(payload.text, format=payload.format)
+    except (UnicodeError, ValueError) as exc:
+        raise HTTPException(422, str(exc))
+    return import_targets_for_owner(parsed, request.state.sid)
+
 
 @app.delete("/api/assets", dependencies=[Depends(authorize)])
 async def clear_scope(request: Request):
