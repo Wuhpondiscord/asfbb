@@ -14,7 +14,8 @@ def test_stale_batch_asset_returns_conflict_without_enqueuing():
 
 def test_dalfox_cli_is_supported_v3_shape():
     cmd=review.command("dalfox","https://example.org/?q=x","example.org")
-    assert cmd[1]=="scan"
+    assert cmd[:4] == ["/opt/asfb-venv/bin/python", "-m", "app.dalfox_runner", "/usr/local/bin/dalfox"]
+    assert cmd[4] == "scan"
     assert "--workers" in cmd
     assert "--worker" not in cmd
 

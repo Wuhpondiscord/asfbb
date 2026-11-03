@@ -83,7 +83,7 @@ def test_planner_endpoint_does_not_run_scanners_or_queue_jobs():
             "reuse_discovery": True, "coverage_profile": "balanced"})
         assert result.status_code == 200
         assert result.json()["effective"] == ["gau", "arjun", "sqlmap"]
-        assert result.json()["budgets"]["retire_files"] == 8
+        assert result.json()["budgets"]["retire_files"] == 16
         assert main.queue.empty() and not run.called
 
 

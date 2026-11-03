@@ -62,7 +62,8 @@ def test_retire_samples_bounded_files_uses_bundled_database_and_maps_findings():
          patch.object(tools.asyncio, "sleep", sleep):
         result = asyncio.run(tools.retirejs("https://example.org/", "example.org", "Test", 1.5,
                                            ["https://outside.org/out.js"]))
-    assert result["status"] == "partial"  # More JS existed than the configured sample.
+    assert result["status"] == "findings" and result["early_stop"]
+    assert result["coverage_complete"] is False  # Deliberate sample cap, findings preserved.
     assert result["sampled_files"] == 4
     assert result["alerts"][0]["url"] == "https://example.org/jquery-0.js"
     assert result["alerts"][0]["risk"] == "High"
