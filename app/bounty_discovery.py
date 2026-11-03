@@ -93,15 +93,19 @@ def policy_analysis(rules, instructions="", partial=False):
     for line in lines:
         lower = line.lower()
         recognized = False
-        if re.search(r"(?:automated|automatic|vulnerability)\s+(?:scann(?:ing|ers?)|tools?)\s+(?:is\s+|are\s+)?(?:not allowed|prohibited|forbidden)|do not use.{0,30}(?:automated|automatic).{0,20}scann", lower):
+        if re.search(r"(?:automated|automatic|vulnerability)\s+(?:scann(?:ing|ers?)|tools?|testing)\s+(?:is\s+|are\s+)?(?:not allowed|not permitted|prohibited|forbidden)|do not use.{0,30}(?:automated|automatic).{0,20}scann|\\bno\\s+(?:automated|automatic)\\s+(?:scann|testing)", lower):
             blocked = True
             evidence.append({"kind": "automation", "text": line[:600]})
             recognized = True
         match = re.search(r"user[- ]agent(?:\s+header)?\s*(?:must\s+(?:be|include)|should\s+(?:be|include)|to|as|=|:|include|contains?)\s*(.+)", line, re.I)
         if match:
             value = match.group(1).strip()
-            quoted = re.match(r'[`"\u201c]([^`"\u201d]+)[`"\u201d]', value)
-            value = quoted.group(1) if quoted else re.split(r"\s+(?:for all|for every|when testing|on all|in all)\b", value, flags=re.I)[0].rstrip(".")
+            quotes = {chr(96): chr(96), chr(34): chr(34), chr(39): chr(39), chr(8220): chr(8221)}
+            if value and value[0] in quotes:
+                value = value[1:].split(quotes[value[0]], 1)[0]
+            else:
+                value = re.split(r"\.\s+|\s+(?:for all|for every|when testing|on all|in all)\b",
+                                 value, flags=re.I)[0].rstrip(".")
             if printable(value):
                 mode = "contains" if re.search(r"include|contains?|append", match.group(0).split(value)[0], re.I) else "exact"
                 item = {"value": value, "mode": mode, "evidence": line[:600]}

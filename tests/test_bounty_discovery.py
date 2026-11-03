@@ -250,3 +250,19 @@ def test_fixed_api_transport_forwards_no_browser_or_account_credentials():
     with patch.object(discovery.httpx, "AsyncClient", Client):
         assert asyncio.run(discovery.fetch_json("/programs"))["ok"]
     assert seen == [discovery.BASE + "/programs"]
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("User-Agent: 'HackerOne-<username>' for all requests.", "HackerOne-<username>"),
+    ("User-Agent: HackerOne-<username>. This is mandatory.", "HackerOne-<username>"),
+    ('User-Agent: "Mozilla/5.0 (X11; Linux x86_64) Fixture/1.0"', "Mozilla/5.0 (X11; Linux x86_64) Fixture/1.0"),
+])
+def test_user_agent_quotes_and_following_prose_are_not_sent_as_header(text, expected):
+    assert discovery.policy_analysis({"policy": text})["user_agents"][0]["value"] == expected
+
+
+def test_explicit_no_automated_scanning_rule_blocks_import():
+    analysis = discovery.policy_analysis({"policy": "No automated scanning is allowed."})
+    assert analysis["automation_prohibited"]
+    with pytest.raises(ValueError):
+        discovery.configure(analysis, discovery.PolicySettings(rules_reviewed=True))
