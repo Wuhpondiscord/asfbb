@@ -392,6 +392,7 @@ def validate_scan_host(host, modules):
 async def create_scan(spec: ScanRequest, request: Request):
     if not spec.modules or len(spec.modules) != len(set(spec.modules)) or not set(spec.modules).issubset(({"zap-passive","katana","nuclei","gau","httpx"} | ACTIVE_MODULES)):
         raise HTTPException(422, "Invalid or duplicate pipeline modules")
+    requested_modules = list(spec.modules)
     execution_plan = build_pipeline_plan(spec.modules, spec.options.order_mode, spec.options.reuse_discovery)
     spec = spec.model_copy(update={"modules": execution_plan["effective"]})
     if "nuclei" in spec.modules:
@@ -418,7 +419,7 @@ async def create_scan(spec: ScanRequest, request: Request):
         if not bounty_discovery.printable(spec.user_agent):
             raise ValueError("User-Agent must be printable text")
         spec, program_policy = bounty_discovery.enforce_asset(request.state.sid, item, spec)
-        execution_plan = build_pipeline_plan(spec.modules, spec.options.order_mode, spec.options.reuse_discovery)
+        execution_plan = build_pipeline_plan([m for m in requested_modules if m in spec.modules], spec.options.order_mode, spec.options.reuse_discovery)
         spec = spec.model_copy(update={"modules": execution_plan["effective"]})
         url, host = target_url(item)
         validate_scan_host(host, spec.modules)
