@@ -48,7 +48,8 @@ def test_oversized_bundles_do_not_use_up_all_slots_before_later_small_scripts():
     assert len(seen) == 7 and result["sampled_files"] == 4
     assert result["coverage"]["oversized"] == 3
     assert result["coverage"]["engine_status"] == "completed"
-    assert result["status"] == "partial"  # Omitted bundles remain explicit coverage gaps.
+    assert result["status"] == "completed" and result["early_stop"]
+    assert result["coverage_complete"] is False  # Policy is complete; coverage stays limited.
 
 
 @pytest.mark.parametrize("name,minutes,deadline", [("current", "1", 180), ("quick", "1", 180), ("balanced", "2", 300), ("thorough", "5", 600)])

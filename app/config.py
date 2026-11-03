@@ -37,7 +37,7 @@ GAU_BREAKER_COOLDOWN_SECONDS = 900
 
 # Individual review deadlines, separate from the short generic process deadline.
 ARJUN_TIMEOUT_SECONDS = 85
-DALFOX_TIMEOUT_SECONDS = 65
+DALFOX_TIMEOUT_SECONDS = 120
 
 # Allow large responses to finish passive rules; keep a hard per-job wait budget.
 ZAP_PASSIVE_WAIT_SECONDS_DEFAULT = 120

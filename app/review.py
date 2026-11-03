@@ -23,18 +23,20 @@ def command(module, url, host, profile="current"):
                 "-w", "/app/app/wordlists/paths.txt", "-t", "1", "-rate", "1",
                 "-maxtime", "25", "-timeout", "5", "-noninteractive", "-json"]
     if module == "arjun":
-        return ["/opt/asfb-venv/bin/arjun", "-u", url, "-t", "1",
-                "-T", str(config.ARJUN_HTTP_TIMEOUT_SECONDS), "-w", config.ARJUN_WORDLIST, "-c", str(config.ARJUN_CHUNK_SIZE), "--rate-limit", str(config.ARJUN_RATE_LIMIT)]
+        return ["/opt/asfb-venv/bin/python", "-m", "app.arjun_runner", "-u", url, "-t", "1",
+                "-T", str(config.ARJUN_HTTP_TIMEOUT_SECONDS), "-w", config.ARJUN_WORDLIST, "-c", str(config.ARJUN_CHUNK_SIZE), "--rate-limit", str(config.ARJUN_RATE_LIMIT), "--disable-redirects"]
     if module == "dalfox":
         # Dalfox's --timeout limits a request, not an entire stage. The scan
         # stage also gets an internal deadline; external process timeout remains
         # authoritative for discovery/preflight or network stalls.
-        return ["/usr/local/bin/dalfox", "scan", url, "--workers", str(config.DALFOX_WORKERS),
+        return ["/opt/asfb-venv/bin/python", "-m", "app.dalfox_runner", "/usr/local/bin/dalfox", "scan", url, "--workers", str(config.DALFOX_WORKERS),
                 "--timeout", str(config.DALFOX_HTTP_TIMEOUT_SECONDS),
                 "--scan-timeout", str(config.DALFOX_SCAN_TIMEOUT_SECONDS if profile == "current" else settings["dalfox_scan_seconds"]),
                 "--max-payloads-per-param", str(config.DALFOX_PAYLOADS_PER_PARAM if profile == "current" else settings["dalfox_payloads"]),
                 "--rate-limit", str(config.DALFOX_RATE_LIMIT),
-                "--skip-mining", "--skip-waf-probe", "--no-color", "--silence", "-f", "json"]
+                "--skip-mining", "--skip-waf-probe", "--skip-reflection-header",
+                "--skip-reflection-cookie", "--skip-reflection-path", "--no-color", "-f", "json"] + (
+                    ["--skip-discovery", "--skip-xss-scanning"] if not urlsplit(url).query else [])
     if module == "sqlmap":
         if not urlsplit(url).query:
             raise ValueError("SQLmap review requires a parameterized URL")
@@ -178,7 +180,6 @@ def choose_sqlmap_target(primary, discovered, parameters, host):
                 same_review_origin(item.get("url"), primary, host)]
     return choose_dalfox_target(primary, eligible, host)
 
-
 def dalfox_coverage(meta):
     """Keep compact coverage counters/status codes; omit raw requests and errors."""
     result = {}
@@ -195,7 +196,7 @@ def dalfox_coverage(meta):
             continue
         target = {}
         status, code = item.get("status"), item.get("error_code")
-        if status in ("completed", "incomplete", "error", "cancelled", "skipped", "failed"):
+        if status in ("completed", "clean", "findings", "incomplete", "error", "cancelled", "skipped", "failed"):
             target["status"] = status
         if isinstance(code, (int, str)) and re.fullmatch(r"[A-Za-z0-9_-]{1,80}", str(code)):
             target["error_code"] = code
@@ -257,12 +258,26 @@ async def review(module, url, host, profile="current"):
     args = command(module, url, host, profile)
     parameters = []
     dalfox_findings, dalfox_meta = [], {}
+    arjun_meta = {}
+    early_stop = False
+    stop_reason = ""
     if module == "arjun":
         with tempfile.TemporaryDirectory(prefix="asfb-arjun-") as tmp:
             export_path = str(Path(tmp) / "parameters.json")
-            lines, status = await execute(args + ["-oJ", export_path],
+            guard_path = str(Path(tmp) / "guard.json")
+            lines, status = await execute(args + ["--asfb-report", guard_path, "-oJ", export_path],
                                           config.ARJUN_TIMEOUT_SECONDS)
             parameters = read_arjun_results(export_path, host)
+            try:
+                raw = json.loads(Path(guard_path).read_text())
+                arjun_meta = {key: raw[key] for key in ("status", "stop_reason", "http_status", "requests",
+                                                       "early_stop", "coverage_complete") if key in raw}
+            except (OSError, ValueError, TypeError):
+                pass
+            if status == "completed" and arjun_meta.get("status") in ("completed", "partial", "failed"):
+                status = arjun_meta["status"]
+                early_stop = arjun_meta.get("early_stop") is True
+                stop_reason = arjun_meta.get("stop_reason", "")
     elif module == "dalfox":
         with tempfile.TemporaryDirectory(prefix="asfb-dalfox-") as tmp:
             path = str(Path(tmp) / "findings.json")
@@ -285,9 +300,18 @@ async def review(module, url, host, profile="current"):
             status = "findings"
         elif has_evidence and status == "failed":
             status = "partial"
+    if (module == "dalfox" and dalfox_meta.get("incomplete") is True
+            and "[asfb] dalfox_scan_budget" in lines and exit_code in (None, 1)
+            and status not in ("timeout", "unavailable")
+            and bool(dalfox_meta.get("target_summary"))
+            and all(item.get("status") in ("incomplete", "findings") for item in dalfox_meta["target_summary"])
+            and dalfox_meta.get("failed_requests") == 0
+            and not any(item.get("error_code") for item in dalfox_meta.get("target_summary", []))):
+        status = "findings" if dalfox_findings else "completed"
+        early_stop, stop_reason = True, "native_time_budget"
     # Code 1 is an expected Dalfox finding outcome, not an error diagnostic.
     displayed_lines = [line for line in lines
-                       if not (module == "dalfox" and status == "findings"
+                       if line != "[asfb] dalfox_scan_budget" and not (module == "dalfox" and status == "findings"
                                and line.strip() == "[diagnostic] Process exit code: 1")]
     reason = " | ".join(line[:180] for line in displayed_lines
                         if line.startswith(("[stderr]", "[diagnostic]")))
@@ -301,11 +325,25 @@ async def review(module, url, host, profile="current"):
             for i, item in enumerate(dalfox_findings[:30]))
     else:
         output = summarize_review(module, displayed_lines)
-    if module == "dalfox" and dalfox_meta.get("incomplete"):
+    if module == "dalfox" and dalfox_meta.get("incomplete") and not early_stop:
         reason = (dalfox_incomplete_reason(dalfox_meta) + ("; " + reason if reason else ""))[:500]
         if not output:
             output = reason
-    if module == "dalfox" and status == "completed" and not urlsplit(url).query:
+    if module == "arjun" and arjun_meta.get("stop_reason"):
+        reason = {"http_unavailable": "Target returned an unhealthy HTTP response",
+                  "endpoint_unavailable": "Selected endpoint is unavailable",
+                  "request_failed": "Target request failed",
+                  "content_unavailable": "Response is not a supported text endpoint",
+                  "native_error": "Arjun native engine error"}.get(stop_reason or arjun_meta["stop_reason"],
+                                                                   "Configured transport policy stopped the profile")
+        if arjun_meta.get("http_status"):
+            reason += " (HTTP " + str(arjun_meta["http_status"]) + ")"
+        output = "Arjun guarded parameter review; " + str(arjun_meta.get("requests", 0)) + " requests; " + reason
+    if early_stop:
+        if module == "dalfox" and not dalfox_findings:
+            output = "Dalfox stopped at its configured native scan budget; partial coverage retained"
+        reason = "Early stop: " + ("native scan time budget reached" if module == "dalfox" else reason) + "; coverage is incomplete"
+    if module == "dalfox" and not early_stop and status == "completed" and not urlsplit(url).query:
         # This is a deliberate coverage tradeoff: DOM AST runs, dictionary
         # mining doesn't. Don't imply an exhaustive reflected-XSS assessment.
         reason = "Bounded DOM/URL review; no query parameters supplied. Dictionary mining is disabled."
@@ -313,7 +351,8 @@ async def review(module, url, host, profile="current"):
             "coverage": {"profile": profile, "budget_seconds": settings["dalfox_scan_seconds"],
                          "payloads_per_parameter": settings["dalfox_payloads"]} if module == "dalfox" else {},
             "exit_code": exit_code,
-            "metadata": dalfox_meta,
+            "metadata": arjun_meta if module == "arjun" else dalfox_meta,
+            **({"early_stop": True, "stop_reason": stop_reason, "coverage_complete": False} if early_stop else {}),
             "findings": dalfox_findings,
             "parameters": parameters,
             "endpoints": ffuf_discoveries(lines, host) if module == "ffuf" else [],
