@@ -42,7 +42,7 @@ for code, status, reason in [(400, "partial", "http_unavailable"), (429, "partia
         assert data["http_status"] == code
         assert "fixture-private" not in report.read_text()
 
-args = ["/usr/local/bin/dalfox", "scan", "https://example.org/?q=fixture-private",
+args = ["/usr/local/bin/dalfox", "scan", "https://example.org?q=fixture-private",
         "--scan-timeout", "300", "-o", "/tmp/fixture-report.json"]
 notice = "[scan] https://example.org/?q=fixture-private exceeded --scan-timeout (300s); cancelling target (stops at next checkpoint)"
 with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess(args, 0, "fixture-private", notice + "\n")):
