@@ -136,7 +136,7 @@ jobs:
             grep -q -- "--ignore-redirects" /tmp/sqlmap-help
             grep -q -- "--output-dir" /tmp/sqlmap-help
             grep -q -- "--flush-session" /tmp/sqlmap-help
-            grep -q -- "--user-agent" /tmp/sqlmap-help
+            grep -q -- "-A" /tmp/sqlmap-help
             /usr/local/bin/katana -h > /tmp/katana-help 2>&1 || true
             grep -q -- "-depth" /tmp/katana-help
             grep -q -- "-list" /tmp/katana-help

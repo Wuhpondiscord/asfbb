@@ -62,7 +62,7 @@ def command(module, url, host, profile="current", agent=None):
         elif module == "dalfox":
             args += ["--user-agent", agent]
         elif module == "sqlmap":
-            args += ["--user-agent=" + agent]
+            args += ["-A", agent]
     return args
 
 

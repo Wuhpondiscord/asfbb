@@ -52,3 +52,9 @@ with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess(ar
         assert dalfox_runner.run(args) == 0
     assert output.getvalue().strip() == "[asfb] dalfox_scan_budget"
 print("Installed Arjun unhealthy-response regression and Dalfox native-budget relay passed; network disabled")
+
+# Parse the installed SQLmap identity option without initializing any scan.
+sys.path.insert(0, "/opt/sqlmap")
+from lib.parse.cmdline import cmdLineParser
+assert cmdLineParser(["sqlmap", "-u", "https://example.org/?id=fixture", "-A", "Fixture-Researcher"]).agent == "Fixture-Researcher"
+print("Installed SQLmap User-Agent option parsed offline")

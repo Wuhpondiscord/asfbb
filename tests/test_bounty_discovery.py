@@ -194,7 +194,7 @@ def test_owned_review_and_expiry_cannot_be_bypassed():
         assert import_program(client, doc, settings={}).status_code == 422
 
 
-@pytest.mark.parametrize("module,flag", [("ffuf", "-H"), ("arjun", "--headers"), ("dalfox", "--user-agent"), ("sqlmap", "--user-agent=Fixture")])
+@pytest.mark.parametrize("module,flag", [("ffuf", "-H"), ("arjun", "--headers"), ("dalfox", "--user-agent"), ("sqlmap", "-A")])
 def test_active_review_commands_carry_required_agent(module, flag):
     args = review.command(module, "https://example.org/?id=1", "example.org", agent="Fixture")
     assert flag in args
