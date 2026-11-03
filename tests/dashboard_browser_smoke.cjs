@@ -9,6 +9,7 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  let html=fs.readFileSync('app/index.html','utf8');const now=Date.now()/1000;
  let builtinInfo={templates:[{id:'technology-headers'}],default_ids:['technology-headers']};
+ const discoveryQueries=[];
  const jobs=[
   {id:'job-one',target:'https://alpha.example.org/',status:'running',created:now-20,stage:'idor-forge',progress:50,request_count:0,modules:['idor-forge'],pipeline:{'idor-forge':'running',amass:'completed'},alerts:[],endpoints:[],stage_details:{amass:{status:'completed',elapsed_ms:120000,early_stop:true,coverage_complete:false,stop_reason:'native_time_budget',reason:'Early stop: native time budget; coverage is incomplete'}}},
   {id:'job-two',target:'https://beta.example.org/',status:'partial',created:now-60,stage:'partial',progress:100,request_count:1,modules:['gau'],pipeline:{gau:'timeout'},alerts:[],endpoints:[],stage_details:{gau:{status:'timeout',elapsed_ms:12000,reason:'Common Crawl deadline',summary:'Partial archive coverage'}}},
@@ -30,6 +31,33 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
   let data={};
   if(u.pathname==='/preferences.js')return route.fulfill({contentType:'text/javascript',body:fs.readFileSync('app/preferences.js','utf8')});
   if(u.pathname==='/')return route.fulfill({contentType:'text/html',body:html});
+  if(u.pathname==='/api/discovery/programs'){
+   discoveryQueries.push(Object.fromEntries(u.searchParams));
+   const programs=Number(u.searchParams.get('offset')||0)===0?[
+    {id:'hackerone:fixture',platform:'hackerone',handle:'fixture',name:'Fixture Example',url:'https://hackerone.com/fixture',offers_bounties:true,min_bounty:100,max_bounty:5000,currency:'usd'},
+    {id:'bugcrowd:review',platform:'bugcrowd',handle:'review',name:'Review Example',url:'https://bugcrowd.com/review',offers_bounties:true,min_bounty:null,max_bounty:null,currency:null}
+   ]:[{id:'yeswehack:extra',platform:'yeswehack',handle:'extra',name:'Extra Example',url:'https://yeswehack.com/programs/extra',offers_bounties:true,max_bounty:1000,currency:'usd'}];
+   return route.fulfill({contentType:'application/json',body:JSON.stringify({programs,total:3,next_offset:Number(u.searchParams.get('offset')||0)===0?25:null,partial:false})});
+  }
+  if(u.pathname.startsWith('/api/discovery/programs/')){
+   const manual=u.pathname.includes('/bugcrowd/');
+   return route.fulfill({contentType:'application/json',body:JSON.stringify({
+    review_id:manual?'review-two':'review-one',program_id:manual?'bugcrowd:review':'hackerone:fixture',name:manual?'review':'fixture',url:manual?'https://bugcrowd.com/review':'https://hackerone.com/fixture',
+    source:{mode:'live',fetched_at:'2026-11-03T12:00:00Z'},total:1,next_offset:null,
+    assets:[{id:manual?'scope-two':'scope-one',identifier:manual?'https://review.example.org/':'https://bounty.example.org/',type:'url',instructions:'Only authorized test accounts',eligible_for_bounty:true}],
+    exclusions:[{identifier:'https://bounty.example.org/admin',instructions:'Excluded'}],
+    analysis:{user_agents:manual?[]:[{value:'HackerOne-<username>',mode:'exact',evidence:'User-Agent: HackerOne-<username>'}],email_domains:manual?[]:['wearehackerone.com'],headers:[],max_rps:null,automation_prohibited:false,review_required:manual,review_reasons:manual?['No supported identification requirements were found']:[],text:'Published rules <img src=x onerror=alert(1)>',partial:false}
+   })});
+  }
+  if(u.pathname==='/api/discovery/import'){
+   const body=route.request().postDataJSON();assert.equal(body.programs.length,1);
+   assert.equal(body.programs[0].review_id,'review-one');
+   assert.equal(body.programs[0].settings.researcher,'fixture-private-handle');
+   assert.equal(body.programs[0].settings.test_email,'fixture-private@wearehackerone.com');
+   assert.equal(body.programs[0].settings.test_account_confirmed,true);
+   const data=addImported('bounty-target','https://bounty.example.org/','discovery');
+   return route.fulfill({contentType:'application/json',body:JSON.stringify({...data,programs:1})});
+  }
   if(u.pathname==='/api/assets')data={assets:importedAssets};
   else if(u.pathname==='/api/import/text'){
    const body=route.request().postDataJSON();
@@ -165,7 +193,7 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
  fs.mkdirSync('ui-review',{recursive:true});
  for(const width of [1440,390]){
   await page.setViewportSize({width,height:1000});
-  for(const name of ['scope','jobs','logs','settings']){
+  for(const name of ['scope','discovery','jobs','logs','settings']){
    await page.locator('#tab-'+name).click();
    if(name==='settings')await page.locator('[data-settings="pipeline"]').click();
    if(width===390&&name==='scope'){
@@ -275,6 +303,37 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
  assert.deepEqual(data.values.futureSetting,{kept:true});
  assert.equal(data.values.settingsZapWait,180);
 
+ await page.setViewportSize({width:1440,height:1000});
+ await page.locator('#tab-discovery').click();
+ await page.waitForFunction(()=>document.querySelectorAll('.discovery-program').length>=2);
+ await page.locator('#discoverySearch').fill('Example');
+ await page.locator('#discoveryCurrency').selectOption('USD');
+ await page.locator('#discoveryReward').fill('1000');
+ await page.locator('#discoverySort').selectOption('max_bounty');
+ await page.getByRole('button',{name:'Apply filters'}).click();
+ await page.waitForFunction(()=>!discoveryState.busy);
+ assert(discoveryQueries.some(q=>q.search==='Example'&&q.currency==='USD'&&q.reward_at_least==='1000'&&q.sort_by==='max_bounty'));
+ await page.locator('[data-program-id="hackerone:fixture"]').check();
+ await page.locator('[data-program-id="bugcrowd:review"]').check();
+ assert((await page.locator('#discoverySelectedCount').textContent()).includes('2 programs'));
+ await page.locator('#discoveryReviewButton').click();
+ await page.waitForFunction(()=>document.querySelectorAll('.discovery-review').length===2);
+ assert.equal(await page.locator('.discovery-review').count(),2);
+ assert((await page.locator('#discoveryRuleCards').textContent()).includes('No supported identification requirements were found'));
+ assert.equal(await page.locator('#discoveryRuleCards img').count(),0);
+ await page.locator('#discoveryResearcher').fill('fixture-private-handle');
+ assert((await page.locator('[data-agent-hint="0"]').textContent()).includes('HackerOne-fixture-private-handle'));
+ await page.locator('[data-policy-email="0"]').fill('fixture-private@wearehackerone.com');
+ await page.locator('[data-policy-account="0"]').check();
+ await page.locator('[data-scope-id="scope-one"]').check();
+ await page.screenshot({path:'ui-review/discovery-review.png',fullPage:true});
+ await page.locator('#discoveryImportButton').click();
+ await page.waitForFunction(()=>currentTab==='scope'&&selectedIds.has('bounty-target'));
+ assert(!(await page.locator('#policy').isChecked()));
+ assert(!(await page.locator('#activeConsent').isChecked()));
+ assert.equal(await page.locator('[data-policy-email="0"]').inputValue(),'');
+ await page.evaluate(()=>preferenceStore.flush());
+ assert(!JSON.stringify(await page.context().cookies()).includes('fixture-private'));
  assert.deepEqual(errors,[]);
  await browser.close();
  console.log('Dashboard browser checks passed: settings order, module inputs, job filters, status dots, stable details, job logs, search, pause and responsive layouts');

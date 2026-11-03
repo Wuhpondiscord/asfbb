@@ -11,7 +11,7 @@ from .coverage import profile as coverage_settings
 
 ACTIVE_MODULES = {"ffuf", "sqlmap", "dalfox", "arjun"}
 
-def command(module, url, host, profile="current"):
+def _command(module, url, host, profile="current"):
     settings = coverage_settings(profile)
     if not in_host(url, host):
         raise ValueError("Review URL must stay on the selected exact host")
@@ -49,6 +49,22 @@ def command(module, url, host, profile="current"):
                 "--timeout=5", "--retries=0", "--technique=B",
                 "--smart", "--disable-coloring", "--ignore-redirects", "--delay=1"]
     raise ValueError("Unsupported review module")
+
+def command(module, url, host, profile="current", agent=None):
+    args = _command(module, url, host, profile)
+    if agent is not None:
+        if not isinstance(agent, str) or not 0 < len(agent) <= 300 or any(ord(c) < 32 or ord(c) > 126 or c == chr(92) for c in agent):
+            raise ValueError("User-Agent must be bounded printable text")
+        if module == "ffuf":
+            args += ["-H", "User-Agent: " + agent]
+        elif module == "arjun":
+            args += ["--headers", "User-Agent: " + agent]
+        elif module == "dalfox":
+            args += ["--user-agent", agent]
+        elif module == "sqlmap":
+            args += ["--user-agent=" + agent]
+    return args
+
 
 def ffuf_discoveries(lines, host):
     """Only preserve directly observed same-host success responses as URLs."""
@@ -281,11 +297,11 @@ def read_dalfox_report(path, host, default_url):
     return findings[:config.DALFOX_FINDINGS_LIMIT], meta
 
 
-async def review(module, url, host, profile="current"):
+async def review(module, url, host, profile="current", agent=None):
     settings = coverage_settings(profile)
     if module == "sqlmap" and not urlsplit(url).query:
         return {"source": module, "status": "skipped", "target": url, "output": "", "reason": "URL has no query parameters"}
-    args = command(module, url, host, profile)
+    args = command(module, url, host, profile, agent)
     parameters = []
     dalfox_findings, dalfox_meta = [], {}
     arjun_meta = {}

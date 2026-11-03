@@ -10,7 +10,7 @@ import httpx
 from fastapi import FastAPI, File, Header, HTTPException, UploadFile, Depends, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from .scope import LEVELS, parse_csv, public_host, target_url, DNSResolutionFailed
 from . import storage
@@ -26,6 +26,7 @@ from .coverage import profile as coverage_settings
 from .web_modules import MODULES as WEB_MODULES, run_web_module
 
 from . import nuclei_catalog
+from . import bounty_discovery
 
 ACTIVE_MODULES = ACTIVE_MODULES | WEB_MODULES
 
@@ -115,6 +116,7 @@ class PipelineOptions(BaseModel):
     parallel_jobs: int = Field(default=config.PARALLEL_JOBS_DEFAULT, ge=1, le=config.PARALLEL_JOBS_MAX)
 
 class ScanRequest(BaseModel):
+    _program_headers: dict = PrivateAttr(default_factory=dict)
     asset_id: str
     policy_confirmed: bool = False
     user_agent: str = Field(default="ASFB-Research/0.1", max_length=300)
@@ -413,6 +415,11 @@ async def create_scan(spec: ScanRequest, request: Request):
     if not item or item.get("owner") != request.state.sid:
         raise HTTPException(409, "Selected asset is no longer available in this session. Refresh assets or re-import the scope CSV.")
     try:
+        if not bounty_discovery.printable(spec.user_agent):
+            raise ValueError("User-Agent must be printable text")
+        spec, program_policy = bounty_discovery.enforce_asset(request.state.sid, item, spec)
+        execution_plan = build_pipeline_plan(spec.modules, spec.options.order_mode, spec.options.reuse_discovery)
+        spec = spec.model_copy(update={"modules": execution_plan["effective"]})
         url, host = target_url(item)
         validate_scan_host(host, spec.modules)
     except ValueError as exc:
@@ -424,6 +431,8 @@ async def create_scan(spec: ScanRequest, request: Request):
     for existing in jobs.values():
         if (existing.get("owner") == request.state.sid
                 and existing.get("asset_id") == spec.asset_id
+                and existing.get("user_agent", "ASFB-Research/0.1") == spec.user_agent
+                and existing.get("program") == program_policy
                 and existing.get("status") in ("queued", "running")
                 and existing.get("modules") == spec.modules
                 and existing.get("options", {}).get("coverage_profile", "current") == spec.options.coverage_profile
@@ -441,11 +450,11 @@ async def create_scan(spec: ScanRequest, request: Request):
     recorded_options["nuclei"]["custom_templates"] = [
         "[inline template]" for _ in spec.options.nuclei.custom_templates]
     jobs[identifier] = {"owner": request.state.sid, "id": identifier, "asset_id": spec.asset_id, "target": url,
-                        "status": "queued", "plan": execution_plan, "alerts": [], "error": None, "created": time.time(),
+                        "status": "queued", "plan": execution_plan, "user_agent": spec.user_agent, "program": program_policy, "alerts": [], "error": None, "created": time.time(),
                         "request_count": 0, "cancelled": False, "modules": spec.modules, "endpoints": [], "pipeline": {}, "reviews": [], "probes": [], "options": recorded_options, "progress": 0, "stage": "queued"}
     log_event(jobs[identifier], "queued", modules=spec.modules, parallel_jobs=spec.options.parallel_jobs,
               order_mode=spec.options.order_mode, coverage_profile=spec.options.coverage_profile,
-              requested_modules=execution_plan["requested"], plan_warnings=execution_plan["warnings"])
+              requested_modules=execution_plan["requested"], plan_warnings=execution_plan["warnings"], program=program_policy)
     # Public scan results are ephemeral.
     await queue.put((identifier, spec))
     return {"id": identifier, "status": "queued"}
@@ -480,8 +489,11 @@ async def batch_scans(payload: BatchRequest, request: Request):
         if item is None or item.get("owner") != request.state.sid:
             raise HTTPException(409, "Selected scope is stale or belongs to another session. Refresh assets, re-import the CSV if necessary, and select targets again.")
         try:
+            candidate = ScanRequest(asset_id=asset_id, modules=payload.modules, options=payload.options,
+                                    user_agent=payload.user_agent, delay_seconds=payload.delay_seconds)
+            candidate, _ = bounty_discovery.enforce_asset(request.state.sid, item, candidate)
             _, host = target_url(item)
-            validate_scan_host(host, payload.modules)
+            validate_scan_host(host, candidate.modules)
         except ValueError as exc:
             raise HTTPException(422, str(exc))
     result = []
@@ -490,6 +502,8 @@ async def batch_scans(payload: BatchRequest, request: Request):
                                                     delay_seconds=payload.delay_seconds, modules=payload.modules, options=payload.options, active_confirmed=payload.active_confirmed), request))
     return {"queued": sum(not item.get("reused", False) for item in result),
             "reused": sum(bool(item.get("reused")) for item in result), "scans": result}
+
+bounty_discovery.install(app, authorize, assets, MAX_TARGETS)
 
 class JWTInput(BaseModel):
     token: str = Field(min_length=10, max_length=16000)
@@ -656,6 +670,8 @@ async def run_scan_job(identifier, spec):
                             headers.update(profile["headers"])
                             if profile["cookie"]:
                                 headers["Cookie"] = profile["cookie"]
+                        headers.update(spec._program_headers)
+                        headers["User-Agent"] = spec.user_agent
                         async with httpx.AsyncClient(timeout=15, follow_redirects=False,
                                                      trust_env=False, proxy=ZAP_URL, verify=False) as client:
                             zap_urls = (assessed_urls(url, endpoints, job.get("probes", []))
@@ -776,6 +792,8 @@ async def run_scan_job(identifier, spec):
                     elif module in ACTIVE_MODULES:
                         profile_kwargs = ({"profile": spec.options.coverage_profile}
                                           if spec.options.coverage_profile != "current" else {})
+                        if spec.user_agent != "ASFB-Research/0.1":
+                            profile_kwargs["agent"] = spec.user_agent
                         if module == "arjun":
                             candidates = choose_arjun_targets(
                                 url, endpoints if spec.options.reuse_discovery else [], host,

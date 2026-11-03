@@ -22,6 +22,7 @@ for code, status, reason in [(400, "partial", "http_unavailable"), (429, "partia
         calls.append(url)
         assert url == "https://example.org/search?id=fixture-private"
         assert kwargs["verify"] is True and kwargs["allow_redirects"] is False
+        assert kwargs["headers"]["User-Agent"] == "Fixture-Researcher"
         assert session.trust_env is False
         response = requests.Response()
         response.status_code = 200 if len(calls) == 1 else code
@@ -35,7 +36,7 @@ for code, status, reason in [(400, "partial", "http_unavailable"), (429, "partia
         with patch.object(arjun_runner, "public_host"), patch.object(requests.sessions.Session, "request", transport):
             result = arjun_runner.run(["-u", "https://example.org/search?id=fixture-private",
                 "-w", "small", "-t", "1", "-c", "150", "--rate-limit", "1000",
-                "--disable-redirects", "--asfb-report", str(report)])
+                "--disable-redirects", "--headers", "User-Agent: Fixture-Researcher", "--asfb-report", str(report)])
         data = json.loads(report.read_text())
         assert result == 0 and len(calls) == 2, (code, data)
         assert data["status"] == status and data["stop_reason"] == reason
