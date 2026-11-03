@@ -318,7 +318,7 @@ def prepare(owner, selection):
             continue
         seen.add(identity)
         # Whole-site tools cannot enforce path-only authorization/exclusions.
-        constrained = path != "/" or url.query or any(classify(x["identifier"], "") != "web" and "*" not in x["identifier"] for x in doc["exclusions"]) or any(
+        constrained = "://" in row["identifier"] or path != "/" or url.query or any(classify(x["identifier"], "") != "web" and "*" not in x["identifier"] for x in doc["exclusions"]) or any(
             matches(url._replace(path="/", query="").geturl(), x["identifier"].replace("*.", ""))
             for x in doc["exclusions"])
         prepared.append((value, row, config, bool(constrained)))
@@ -339,7 +339,7 @@ def enforce_asset(owner, asset, spec):
     reasons = []
     if restricted or config["headers"] or config["rate"] is not None:
         modules = [m for m in modules if m == "zap-passive"]
-        reasons.append("Exact-URL ZAP profile enforces path/exclusion/header/rate constraints")
+        reasons.append("Exact-URL ZAP profile enforces URL/path/exclusion/header/rate constraints")
     elif config["apply_agent"]:
         modules = [m for m in modules if m not in ("testssl", "garak")]
         if len(modules) != len(spec.modules):

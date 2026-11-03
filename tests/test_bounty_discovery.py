@@ -266,3 +266,15 @@ def test_explicit_no_automated_scanning_rule_blocks_import():
     assert analysis["automation_prohibited"]
     with pytest.raises(ValueError):
         discovery.configure(analysis, discovery.PolicySettings(rules_reviewed=True))
+
+
+def test_url_scope_origin_constraints_keep_exact_url_profile_even_at_root():
+    main.assets.clear(); main.jobs.clear(); main.queue = asyncio.Queue()
+    with TestClient(main.app) as client, patch.object(main, "run_scan_job", no_scan), patch.object(main, "public_host"):
+        doc = load_program(client, fixture_page("User-Agent: Fixture", [dict(ROW, identifier="https://example.org/", type="url")]))
+        response = import_program(client, doc, settings={})
+        assert response.status_code == 200
+        queued = client.post("/api/scans", json={"asset_id": response.json()["web_asset_ids"][0],
+            "policy_confirmed": True, "active_confirmed": True, "modules": ["zap-passive", "httpx", "nuclei"]})
+        assert queued.status_code == 200, queued.text
+        assert main.jobs[queued.json()["id"]]["modules"] == ["zap-passive"]
