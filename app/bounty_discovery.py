@@ -93,7 +93,7 @@ def policy_analysis(rules, instructions="", partial=False):
     for line in lines:
         lower = line.lower()
         recognized = False
-        if re.search(r"(?:automated|automatic|vulnerability)\s+(?:scann(?:ing|ers?)|tools?|testing)\s+(?:is\s+|are\s+)?(?:not allowed|not permitted|prohibited|forbidden)|do not use.{0,30}(?:automated|automatic).{0,20}scann|\\bno\\s+(?:automated|automatic)\\s+(?:scann|testing)", lower):
+        if re.search(r"(?:automated|automatic|vulnerability)\s+(?:scann(?:ing|ers?)|tools?|testing)\s+(?:is\s+|are\s+)?(?:not allowed|not permitted|prohibited|forbidden)|do not use.{0,30}(?:automated|automatic).{0,20}scann|\bno\s+(?:automated|automatic)\s+(?:scann|testing)", lower):
             blocked = True
             evidence.append({"kind": "automation", "text": line[:600]})
             recognized = True
