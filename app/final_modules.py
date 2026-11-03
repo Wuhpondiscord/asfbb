@@ -294,8 +294,16 @@ async def run(module, url, host, agent, delay, inputs=None, profile="current"):
                 status, early_stop = "completed", True
                 reason += "; Early stop: native enumeration time budget reached; inventory coverage is incomplete"
         elif module == "kiterunner":
-            # Kiterunner prints structured zerolog hit records; retain only scoped URLs.
+            # The pinned CLI's responses[].sc is the observed HTTP status.
+            # A route record alone (including 404/wildcard hits) is not discovery.
             for item in json_rows(rows):
+                responses = item.get("responses")
+                if (item.get("method") != "GET" or not isinstance(responses, list)
+                        or not responses or not isinstance(responses[0], dict)):
+                    continue
+                code = responses[0].get("sc")
+                if type(code) is not int or not 200 <= code < 300:
+                    continue
                 def as_text(value):
                     if not isinstance(value, str):
                         return ""
@@ -310,7 +318,9 @@ async def run(module, url, host, agent, delay, inputs=None, profile="current"):
                 candidate = item.get("url") or (urljoin(target.rstrip("/") + "/", path) if target else "")
                 if isinstance(candidate, str) and same_origin(candidate, url):
                     endpoints.append(candidate)
+                    probes.append({"url": candidate, "status_code": code, "source": "kiterunner"})
             endpoints = sorted(set(endpoints))[:20]
+            probes = list({item["url"]: item for item in probes}.values())[:20]
         elif module == "depscan":
             candidates = sorted((root / "reports").glob("*.vdr.json"))
             if candidates:

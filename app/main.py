@@ -16,7 +16,7 @@ from .scope import LEVELS, parse_csv, public_host, target_url, DNSResolutionFail
 from . import storage
 from .jwtcheck import inspect_jwt
 from .pipeline import katana, nuclei, gau, probe, in_host
-from .review import ACTIVE_MODULES, review, choose_arjun_target, choose_dalfox_target, choose_sqlmap_target
+from .review import ACTIVE_MODULES, review, choose_arjun_target, choose_arjun_targets, choose_dalfox_target, choose_sqlmap_target
 from . import config
 from .concurrency import dispatch, module_slot
 from .module_inputs import ModuleInputs
@@ -774,17 +774,39 @@ async def run_scan_job(identifier, spec):
                             endpoints = endpoints[:spec.options.endpoint_limit]
                             job["endpoints"] = endpoints[1:]
                     elif module in ACTIVE_MODULES:
-                        review_url = (choose_arjun_target(
-                                          page_target(url, job.get("probes", [])) if spec.options.reuse_discovery else url,
-                                          assessed_urls(url, endpoints, job.get("probes", [])) if spec.options.reuse_discovery else endpoints, host)
-                                      if module == "arjun" else
-                                      choose_dalfox_target(url, job.get("parameters", []), host)
-                                      if module == "dalfox" else
-                                      choose_sqlmap_target(url, endpoints, job.get("parameters", []), host)
-                                      if module == "sqlmap" else url)
                         profile_kwargs = ({"profile": spec.options.coverage_profile}
                                           if spec.options.coverage_profile != "current" else {})
-                        result = await review(module, review_url, host, **profile_kwargs)
+                        if module == "arjun":
+                            candidates = choose_arjun_targets(
+                                url, endpoints if spec.options.reuse_discovery else [], host,
+                                probes=job.get("probes", []) if spec.options.reuse_discovery else [],
+                                maximum=3 if spec.options.reuse_discovery else 1)
+                            result = {"source": "arjun", "status": "skipped", "parameters": [],
+                                      "target": url, "reason": "No applicable endpoint: observed URLs are missing, redirecting or non-text assets",
+                                      "output": "Parameter discovery skipped: no eligible live endpoint"}
+                            attempted = 0
+                            for review_url in candidates:
+                                attempted += 1
+                                result = await review(module, review_url, host, **profile_kwargs)
+                                metadata = result.get("metadata") or {}
+                                missing = (metadata.get("stop_reason") == "endpoint_unavailable"
+                                           and metadata.get("http_status") in (404, 410)
+                                           and metadata.get("requests") == 1 and result.get("status") == "partial")
+                                if not missing:
+                                    break
+                                log_event(job, "data_handoff", module=module,
+                                          data="Missing candidate excluded before parameter discovery",
+                                          selected_url=review_url, http_status=metadata["http_status"])
+                                result = {**result, "status": "skipped",
+                                          "reason": "No applicable endpoint: candidate returned HTTP " + str(metadata["http_status"]) + " before parameter discovery",
+                                          "output": "Parameter discovery skipped on missing endpoint; no parameters tested"}
+                            result.setdefault("metadata", {})["attempted_endpoints"] = attempted
+                        else:
+                            review_url = (choose_dalfox_target(url, job.get("parameters", []), host)
+                                          if module == "dalfox" else
+                                          choose_sqlmap_target(url, endpoints, job.get("parameters", []), host)
+                                          if module == "sqlmap" else url)
+                            result = await review(module, review_url, host, **profile_kwargs)
                         job["reviews"].append(result)
                         if module == "dalfox":
                             job["alerts"].extend(result.get("findings", []))
@@ -859,6 +881,8 @@ async def run_scan_job(identifier, spec):
                                    "providers": result.get("providers", [])}
                 if module == "dalfox":
                     diagnostics["coverage"] = result.get("metadata", {})
+                if module == "arjun":
+                    diagnostics["parameter_review"] = result.get("metadata", {})
                 if result.get("coverage") is not None and module != "gau":
                     diagnostics["coverage_budget" if module == "dalfox" else "coverage"] = result["coverage"]
                 if result.get("seed_count") is not None:

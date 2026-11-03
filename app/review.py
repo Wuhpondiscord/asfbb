@@ -108,23 +108,53 @@ def read_arjun_results(path, host):
     return found[:100]
 
 
-def choose_arjun_target(primary, discovered, host):
-    """Prefer an already-discovered parameterized or API URL on the same exact host."""
-    if not config.ARJUN_PREFER_DYNAMIC_ENDPOINTS:
-        return primary
-    candidates = [u for u in discovered if isinstance(u, str) and in_host(u, host)]
+def choose_arjun_targets(primary, discovered, host, probes=None, maximum=3):
+    """Prefer observed live responses; API-looking names alone are not evidence."""
+    def key(candidate):
+        parts = urlsplit(candidate)
+        return (parts.scheme, parts.hostname, parts.port or (443 if parts.scheme == "https" else 80),
+                parts.path or "/", parts.query)
+
+    codes = {}
+    for item in probes or []:
+        if isinstance(item, dict) and same_review_origin(item.get("url"), primary, host):
+            code = item.get("status_code", item.get("status-code"))
+            if type(code) is int:
+                codes[key(item["url"])] = code
     def score(value):
         parts = urlsplit(value)
         path = parts.path.lower()
+        if path.endswith((".js", ".mjs", ".css", ".svg", ".png", ".jpg", ".jpeg", ".gif",
+                          ".woff", ".woff2", ".json", ".map", ".ico", ".webmanifest", ".pdf")):
+            return -1
         if parts.query:
             return 3
         if "/api/" in path or path.endswith((".php", ".aspx", ".jsp", ".cgi")):
             return 2
-        if path.endswith((".js", ".css", ".svg", ".png", ".jpg", ".woff", ".json", ".map", ".ico", ".webmanifest")):
-            return -1
         return 0
-    best = max(candidates, key=score, default=primary)
-    return best if score(best) > score(primary) else primary
+
+    inventory = [primary] + list(discovered or []) if config.ARJUN_PREFER_DYNAMIC_ENDPOINTS else [primary]
+    candidates, seen = [], set()
+    for candidate in inventory:
+        if not same_review_origin(candidate, primary, host) or score(candidate) < 0:
+            continue
+        code, identity = codes.get(key(candidate)), key(candidate)
+        if identity in seen or code in (404, 410) or code is not None and 300 <= code < 400:
+            continue
+        seen.add(identity)
+        candidates.append(candidate)
+    candidates.sort(key=lambda candidate: (0 if 200 <= codes.get(key(candidate), 0) < 300 else 1 if codes.get(key(candidate)) is None else 2,
+                                            -score(candidate), inventory.index(candidate)))
+    limit = max(1, min(3, int(maximum)))
+    selected = candidates[:limit]
+    if limit > 1 and primary in candidates and primary not in selected:
+        selected[-1] = primary
+    return selected
+
+
+def choose_arjun_target(primary, discovered, host):
+    """Legacy single-target selection, without probe metadata."""
+    return next(iter(choose_arjun_targets(primary, discovered, host, maximum=1)), primary)
 
 
 def choose_dalfox_target(primary, parameters, host):

@@ -97,7 +97,7 @@ def test_kiterunner_uses_only_small_get_dictionary_and_parses_upstream_hit_shape
         assert args[args.index("--delay") + 1] == "1.5s"
         assert "127.0.0.1" not in " ".join(args)
         assert len(Path(args[args.index("-w") + 1]).read_text().splitlines()) == 8
-        return [json.dumps({"method": "GET", "target": "https://example.org", "path": "/api/v1", "responses": []}),
+        return [json.dumps({"method": "GET", "target": "https://example.org", "path": "/api/v1", "responses": [{"sc": 200}]}),
                 json.dumps({"method": "GET", "target": "https://outside.org", "path": "/api"})], "completed"
     with patch.object(modules, "execute", execute):
         result = asyncio.run(modules.run("kiterunner", "https://example.org/", "example.org", "Test", 1.5,
