@@ -8,6 +8,7 @@ def test_httpx_batches_targets_and_filters_scope():
     calls = []
     async def fake(args, timeout):
         assert "-l" in args and "-u" not in args
+        assert "-nfs" in args
         payload = Path(args[args.index("-l") + 1]).read_text().splitlines()
         calls.append(payload)
         assert timeout >= len(payload)

@@ -3,7 +3,6 @@
 Edit this file before deployment. Server-side limits remain authoritative;
 the settings page exposes normal per-job overrides within these maxima.
 """
-ACTIVE_BATCH_LIMIT = 100
 QUEUE_CAPACITY = 1000
 # Optional concurrent targets; keep HF CPU/memory and external tools bounded.
 PARALLEL_JOBS_DEFAULT = 1

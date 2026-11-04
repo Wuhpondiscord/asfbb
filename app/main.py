@@ -117,6 +117,7 @@ class PipelineOptions(BaseModel):
 
 class ScanRequest(BaseModel):
     _program_headers: dict = PrivateAttr(default_factory=dict)
+    _program_origin: bool = PrivateAttr(default=False)
     asset_id: str
     policy_confirmed: bool = False
     user_agent: str = Field(default="ASFB-Research/0.1", max_length=300)
@@ -479,8 +480,8 @@ async def batch_scans(payload: BatchRequest, request: Request):
         raise HTTPException(422, "Configure IDOR-Forge comparisons for one selected asset at a time")
     if len(payload.asset_ids) > 1 and (payload.options.inputs.source_text or payload.options.inputs.sbom_text):
         raise HTTPException(422, "Attach source/SBOM input to one selected asset per job")
-    if ACTIVE_MODULES.intersection(payload.modules) and (len(payload.asset_ids) > config.ACTIVE_BATCH_LIMIT or not payload.active_confirmed):
-        raise HTTPException(422, "Active review requires authorization and at most 100 targets")
+    if ACTIVE_MODULES.intersection(payload.modules) and not payload.active_confirmed:
+        raise HTTPException(422, "Active review requires authorization")
     if not payload.policy_confirmed:
         raise HTTPException(422, "Program policy confirmation is required")
     if len(set(payload.asset_ids)) != len(payload.asset_ids) or queue.qsize() + len(payload.asset_ids) > 1000:
@@ -518,7 +519,7 @@ def jwt_inspect(payload: JWTInput):
 
 @app.get("/api/scans", dependencies=[Depends(authorize)])
 def scan_list(request: Request):
-    return [v for v in jobs.values() if v.get("owner") == request.state.sid][-100:]
+    return [v for v in jobs.values() if v.get("owner") == request.state.sid]
 
 @app.delete("/api/findings", dependencies=[Depends(authorize)])
 def clear_findings(request: Request):
@@ -848,6 +849,14 @@ async def run_scan_job(identifier, spec):
                     log_event(job, "stage_exception", module=module,
                               error_type=exc.__class__.__name__)
                     result = {"status":"failed", "reason":"Module exception: "+exc.__class__.__name__}
+                if spec._program_origin:
+                    # Filter each handoff before any later module can consume it.
+                    from .web_modules import same_origin
+                    endpoints = [candidate for candidate in endpoints if same_origin(candidate, url)]
+                    job["endpoints"] = endpoints[1:]
+                    for field in ("probes", "parameters", "alerts"):
+                        job[field] = [item for item in job.get(field, [])
+                                      if same_origin(item.get("url", ""), url)]
                 job["pipeline"][module] = result["status"]
                 summary = str(result.get("output") or "")
                 if not summary:

@@ -149,3 +149,16 @@ def test_equivalent_root_urls_do_not_consume_the_extra_archive_seed_slot():
     assert planning.crawl_seeds("https://example.org", [
         "https://example.org/", "https://example.org/#top", "https://example.org:443/",
         "https://example.org/help"], maximum=2) == ["https://example.org", "https://example.org/help"]
+
+def test_katana_stays_on_exact_origin_without_discovery_reuse():
+    async def execute(args, timeout):
+        assert "-dr" in args
+        scope = args[args.index("-cs") + 1]
+        import re
+        assert re.search(scope, "https://example.org/help")
+        assert not re.search(scope, "http://example.org/help")
+        assert not re.search(scope, "https://example.org:8080/help")
+        assert not re.search(scope, "https://other.example.org/help")
+        return [], "completed"
+    with patch.object(pipeline, "execute", execute):
+        asyncio.run(pipeline.katana("https://example.org/", "example.org", "Fixture"))

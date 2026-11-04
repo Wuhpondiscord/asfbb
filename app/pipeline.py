@@ -81,15 +81,14 @@ async def katana(url, host, agent, depth=1, limit=None, seed_urls=None, coverage
             args.extend(["-list", path])
         else:
             args.extend(["-u", url])
-        if seed_urls is not None:
-            parts = urlsplit(url)
-            port = parts.port or (443 if parts.scheme == "https" else 80)
-            port_pattern = ("(?::" + str(port) + ")?") if port in (80, 443) else ":" + str(port)
-            args.extend(["-cs", "^" + re.escape(parts.scheme + "://" + parts.hostname) +
-                         port_pattern + r"(?:[/?#]|$)"])
+        parts = urlsplit(url)
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        port_pattern = ("(?::" + str(port) + ")?") if port in (80, 443) else ":" + str(port)
+        args.extend(["-cs", "^" + re.escape(parts.scheme + "://" + parts.hostname) +
+                     port_pattern + r"(?:[/?#]|$)"])
         args.extend(["-d", str(max(1, min(int(depth), 5))), "-fs", "fqdn", "-c", "1",
                      "-p", "1", "-rl", "1", "-ct", "30s", "-timeout", "8", "-retry", "0",
-                     "-H", "User-Agent: " + agent, "-silent", "-duc"])
+                     "-H", "User-Agent: " + agent, "-silent", "-duc", "-dr"])
         rows, status = await execute(args, settings["katana_timeout"] if seed_urls is not None
                                       else config.KATANA_TIMEOUT_SECONDS)
     return {"status": status, "endpoints": list(dict.fromkeys(x.strip() for x in rows if in_host(x.strip(), host)))[:max(1, min(int(limit or config.ENDPOINT_LIMIT_DEFAULT), config.ENDPOINT_LIMIT_MAX))],
@@ -351,7 +350,7 @@ async def probe(urls, host, agent, limit=1):
                 handle.write("\n".join(subset) + "\n")
             args = ["/usr/local/bin/pd-httpx", "-l", path, "-json", "-silent",
                     "-rl", "1", "-threads", "1", "-timeout", "8", "-retries", "0", "-ct",
-                    "-H", "User-Agent: " + agent, "-no-color"]
+                    "-H", "User-Agent: " + agent, "-no-color", "-nfs"]
             rows, status = await execute(
                 args, config.HTTPX_TIMEOUT_SECONDS + len(subset) * 2)
             all_rows.extend(rows)

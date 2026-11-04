@@ -33,6 +33,7 @@ class PolicySettings(BaseModel):
     test_account_confirmed: bool = False
     rules_reviewed: bool = False
     custom_agent: str = Field(default="", max_length=300)
+    default_agent: str = Field(default="", max_length=300)
     replacements: dict[str, str] = Field(default_factory=dict, max_length=20)
     header_values: dict[str, str] = Field(default_factory=dict, max_length=5)
 
@@ -242,6 +243,8 @@ def configure(analysis, settings):
         raise ValueError("Conflicting User-Agent examples need a reviewed manual value")
     if exact:
         agent = exact[0]
+    if not requirements and settings.default_agent and not settings.custom_agent:
+        agent = substitute(settings.default_agent, settings.researcher, settings.replacements, settings.test_email)
     if settings.custom_agent:
         custom_agent = substitute(settings.custom_agent, settings.researcher, settings.replacements, settings.test_email)
         if not printable(custom_agent):
@@ -279,6 +282,8 @@ def configure(analysis, settings):
     if rate is not None and rate < 1 / 30:
         raise ValueError("This rate requirement is below the scanner's supported pacing; review manually")
     return {"user_agent": agent, "apply_agent": bool(requirements or settings.custom_agent),
+            "default_agent": agent if settings.default_agent and not (requirements or settings.custom_agent) else "",
+            "agent_source": "reviewed override" if settings.custom_agent else "program rules" if requirements else "identity default" if settings.default_agent else "scan queue fallback",
             "headers": headers, "rate": rate, "email_domains": domains,
             "reviewed": settings.rules_reviewed}
 
@@ -314,6 +319,22 @@ def matches(identifier, candidate):
         if "*" in path:
             return fnmatchcase(target_path, path.replace("[", "[[]").replace("?", "[?]"))
         return (path == "/" or target_path == path or target_path.startswith(path.rstrip("/") + "/")) and (not a.query or a.query == b.query)
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
+def exclusion_on_origin(identifier, target):
+    """A path exclusion affects this origin even when its host is wildcarded."""
+    if identifier.startswith("/") and not identifier.startswith("//"):
+        return True
+    try:
+        rule, _ = url_parts(identifier)
+        url, _ = url_parts(target)
+        host = (url.hostname.endswith(rule.hostname[1:]) and url.hostname != rule.hostname[2:]
+                if rule.hostname.startswith("*.") else url.hostname == rule.hostname)
+        if "://" in identifier:
+            return host and rule.scheme == url.scheme and (rule.port or (443 if rule.scheme == "https" else 80)) == (url.port or (443 if url.scheme == "https" else 80))
+        return host
     except (ValueError, TypeError, AttributeError):
         return False
 
@@ -366,6 +387,39 @@ class SetupMissing(ValueError):
     """A program can be skipped while other selected programs continue."""
 
 
+def scope_candidates(rows):
+    """Offer explicit domain bullets from a broad prose scope for manual selection.
+
+    Never mine the general policy, links, cloud examples or acquisition names.
+    The generated candidates remain tied to their published parent description.
+    """
+    expanded = list(rows)
+    seen = {(row["identifier"].lower(), row.get("type")) for row in rows}
+    for row in rows:
+        if row.get("type") != "other":
+            continue
+        text = clean_template(plain(row.get("instructions"))).replace(chr(92) + "*", "*")
+        if not re.search(r"\bscope\b", text, re.I) or not re.search(r"\bdomains?\b", text, re.I):
+            continue
+        domains = re.findall(r"(?:^|\s)[*•-]\s+((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})(?=\s|$|[,;])", text, re.I)
+        for domain in list(dict.fromkeys(value.lower() for value in domains))[:100]:
+            identifiers = [domain]
+            if re.search(r"domains?\s+and\s+subdomains?", text, re.I):
+                identifiers.append("*." + domain)
+            for identifier in identifiers:
+                kind = "wildcard" if identifier.startswith("*.") else "domain"
+                if (identifier, kind) in seen:
+                    continue
+                candidate = {"identifier": identifier, "type": kind,
+                             "instructions": "Explicit domain listed in this prose scope; verify ownership and exclusions. " + text,
+                             "eligible_for_bounty": row.get("eligible_for_bounty"),
+                             "scope_source": row["identifier"], "requires_scope_review": True}
+                candidate["id"] = asset_id(candidate)
+                expanded.append(candidate)
+                seen.add((identifier, kind))
+    return expanded
+
+
 def prepare(owner, selection):
     doc = document(owner, selection.review_id)
     try:
@@ -399,11 +453,14 @@ def prepare(owner, selection):
         if identity in seen:
             continue
         seen.add(identity)
-        # Whole-site tools cannot enforce path-only authorization/exclusions.
-        constrained = "://" in row["identifier"] or path != "/" or url.query or any(classify(x["identifier"], "") != "web" and "*" not in x["identifier"] for x in doc["exclusions"]) or any(
-            matches(url._replace(path="/", query="").geturl(), x["identifier"].replace("*.", ""))
+        # A root website scope permits a same-origin pipeline. Narrow paths,
+        # queries and exclusions on that host still need exact-URL enforcement.
+        scope_url, scope_path = url_parts(row["identifier"])
+        constrained = scope_path != "/" or bool(scope_url.query) or any(
+            exclusion_on_origin(x["identifier"], value)
             for x in doc["exclusions"])
-        prepared.append((value, row, config, bool(constrained)))
+        profile = "exact-url" if constrained else "origin" if "://" in row["identifier"] else ""
+        prepared.append((value, row, config, profile))
     if not prepared:
         raise ValueError("Choose at least one explicit web target; selected wildcards require concrete URLs")
     return doc, prepared
@@ -419,18 +476,26 @@ def enforce_asset(owner, asset, spec):
     config, restricted = binding["config"], binding["restricted"]
     modules = list(spec.modules)
     reasons = []
-    if restricted or config["headers"] or config["rate"] is not None:
+    exact = restricted in (True, "exact-url") or bool(config["headers"]) or config["rate"] is not None
+    origin_only = restricted == "origin"
+    if exact:
         modules = [m for m in modules if m == "zap-passive"]
         reasons.append("Exact-URL ZAP profile enforces URL/path/exclusion/header/rate constraints")
-    elif config["apply_agent"]:
+    elif origin_only:
+        # These profiles keep target HTTP requests on the selected origin or
+        # process supplied artifacts. Nikto/Dalfox have no equivalent guard here.
+        modules = [m for m in modules if m not in ("nikto", "dalfox")]
+        reasons.append("Website-root scope: same-origin pipeline; Nikto/Dalfox omitted because their origin guards are not verified")
+    if config["apply_agent"] and not exact:
+        before_identity = len(modules)
         modules = [m for m in modules if m not in ("testssl", "garak")]
-        if len(modules) != len(spec.modules):
+        if len(modules) != before_identity:
             reasons.append("TLS/LLM profiles without verified identity-header support omitted")
     if not modules:
         raise ValueError("Selected modules cannot enforce these rules; enable ZAP passive for this program")
     options = spec.options.model_copy(deep=True)
     delay = spec.delay_seconds
-    if restricted or config["headers"] or config["rate"] is not None:
+    if exact:
         options.reuse_discovery = False
         options.zap_endpoint_limit = 1
         options.parallel_jobs = 1
@@ -438,11 +503,13 @@ def enforce_asset(owner, asset, spec):
             delay = max(delay, 1 / config["rate"])
     omitted = [m for m in spec.modules if m not in modules]
     spec = spec.model_copy(update={"modules": modules, "options": options, "delay_seconds": delay,
-                                   "user_agent": config["user_agent"] if config["apply_agent"] else spec.user_agent})
+                                   "user_agent": config["user_agent"] if config["apply_agent"] else (config.get("default_agent") or spec.user_agent)})
     spec._program_headers = config["headers"]
+    spec._program_origin = origin_only and not exact
     summary = {"id": doc["program_id"], "name": doc["name"], "url": doc["url"],
                "policy_revision": doc["revision"], "fetched_at": doc["source"].get("fetched_at"),
-               "identity_applied": config["apply_agent"], "test_account_domains": config["email_domains"],
+               "identity_applied": config["apply_agent"], "identity_source": config.get("agent_source", "program rules"),
+               "scope_profile": "exact-url" if exact else "origin" if origin_only else "host", "test_account_domains": config["email_domains"],
                "manual_review": config["reviewed"], "constraints": reasons,
                "omitted_modules": omitted}
     return spec, summary
@@ -478,10 +545,13 @@ def install(app, authorize, assets, maximum):
             raise HTTPException(422, "Unsupported program reference")
         result = await fetch_json("/programs/" + platform + "/" + quote(handle, safe="") + "/assets",
                                   {"limit": 1000, "offset": offset})
-        rows = [dict(row, id=asset_id(row)) for row in result.get("in_scope", []) if isinstance(row, dict) and isinstance(row.get("identifier"), str)]
+        rows = scope_candidates([dict(row, id=asset_id(row)) for row in result.get("in_scope", []) if isinstance(row, dict) and isinstance(row.get("identifier"), str)])
         exclusions = [row for row in result.get("out_of_scope", []) if isinstance(row, dict) and isinstance(row.get("identifier"), str)]
         instructions = "\n".join(plain(row.get("instructions")) + "\n" + plain(row.get("raw")) for row in rows)
         analysis = policy_analysis(result.get("rules"), instructions, bool(result.get("partial")))
+        if any(row.get("requires_scope_review") for row in rows):
+            analysis["review_required"] = True
+            analysis["review_reasons"].append("Review domain candidates extracted from the published prose scope; no other domains are implied")
         if any(classify(row["identifier"], "") != "web" and "*" not in row["identifier"] for row in exclusions):
             analysis["review_required"] = True
             analysis["review_reasons"].append("Some exclusions are prose or non-web scope; verify the selected URLs")
@@ -507,8 +577,8 @@ def install(app, authorize, assets, maximum):
             record["url"] = source_url
         _documents[(request.state.sid, review_id)] = record
         return {k: value for k, value in record.items() if k != "stored"} | {
-            "next_offset": result.get("next_offset"), "total": result.get("total"),
-            "scope_note": "Wildcards need explicit URLs. Exclusions remain in effect. Import does not start a scan."}
+            "next_offset": result.get("next_offset"), "total": (result.get("total") or 0) + len(rows) - len(result.get("in_scope", [])),
+            "scope_note": "Select explicit published domains or URLs. Prose-scope candidates need rule review; unlisted domains are not implied. Wildcards need concrete URLs. Import does not start a scan."}
 
     @app.post("/api/discovery/resolve", dependencies=[Depends(authorize)])
     def resolve_programs(payload: ImportSelection, request: Request):
@@ -518,7 +588,8 @@ def install(app, authorize, assets, maximum):
                 doc = document(request.state.sid, selection.review_id)
                 config = configure(doc["analysis"], selection.settings)
                 results.append({"review_id": selection.review_id, "ready": True,
-                                "user_agent": config["user_agent"] if config["apply_agent"] else None,
+                                "user_agent": config["user_agent"] if config["apply_agent"] or config.get("default_agent") else None,
+                                "agent_source": config.get("agent_source"),
                                 "headers": config["headers"], "email_domains": config["email_domains"]})
             except ValueError as exc:
                 results.append({"review_id": selection.review_id, "ready": False, "reason": str(exc)})

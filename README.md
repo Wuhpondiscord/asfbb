@@ -376,3 +376,12 @@ WPScan 4.2.0 requires an API token for `vp,vt` enumeration. Without a configured
 Arjun stops on a missing initial baseline, while later 404/410 parameter responses reach its native comparison logic. Authentication failures, throttling, server failures, deadlines and transport errors remain visible. Scope and request/response budgets remain enforced.
 
 A bracketed concrete handle such as `<wuhp>` resolves when it matches the configured researcher handle. Explicit custom replacement values can be bare handles or a single angle-bracketed value; unknown template tokens still require configuration. Duplicate identical upstream policy fields are displayed once.
+### Program scope profiles and identity precedence
+
+Program-required User-Agents take priority over identity defaults and the request panel's fallback, including mixed-program batches. A deliberate reviewed per-program override remains separate from reusable defaults. Setup previews label the source of the resolved agent. Required X-* headers remain separate headers.
+
+Website-root URL scopes now retain an origin-enforced pipeline rather than becoming ZAP-only. Katana enforces the selected scheme/host/port with redirects disabled, HTTPX preserves input schemes, and program-origin handoffs filter URLs before downstream stages consume them. Nikto and Dalfox are omitted for origin-only URL scopes because their adapters do not provide equivalent origin guards. Domain/hostname scopes keep their broader compatible pipeline. Narrow path/query scopes, exclusions affecting the selected origin, required additional headers and rate limits still use the exact-URL ZAP profile. Each job shows its profile, identity source, constraints and omitted modules.
+
+Explicit domain bullets in a broad prose scope are offered as derived candidates for manual selection and required rule review. A scope explicitly mentioning domains and subdomains also offers corresponding wildcard entries, which still require concrete URLs. Generic infrastructure descriptions, cloud-provider examples and policy links never become targets. Exclusions remain enforced. Unrelated prose exclusions require review but no longer force every domain into ZAP-only mode.
+
+The separate 100-target active-batch cap has been removed in the API and UI. Active authorization is still required; the shared queue holds up to 1,000 jobs and target concurrency remains bounded to three. The jobs endpoint now returns all jobs owned by the session instead of silently returning only its latest 100.

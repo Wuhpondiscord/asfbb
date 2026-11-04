@@ -270,16 +270,18 @@ def test_explicit_no_automated_scanning_rule_blocks_import():
         discovery.configure(analysis, discovery.PolicySettings(rules_reviewed=True))
 
 
-def test_url_scope_origin_constraints_keep_exact_url_profile_even_at_root():
+def test_root_website_scope_keeps_origin_compatible_pipeline():
     main.assets.clear(); main.jobs.clear(); main.queue = asyncio.Queue()
     with TestClient(main.app) as client, patch.object(main, "run_scan_job", no_scan), patch.object(main, "public_host"):
         doc = load_program(client, fixture_page("User-Agent: Fixture", [dict(ROW, identifier="https://example.org/", type="url")]))
         response = import_program(client, doc, settings={})
         assert response.status_code == 200
         queued = client.post("/api/scans", json={"asset_id": response.json()["web_asset_ids"][0],
-            "policy_confirmed": True, "active_confirmed": True, "modules": ["zap-passive", "httpx", "nuclei"]})
+            "policy_confirmed": True, "active_confirmed": True, "modules": ["zap-passive", "httpx", "nuclei", "nikto", "dalfox"]})
         assert queued.status_code == 200, queued.text
-        assert main.jobs[queued.json()["id"]]["modules"] == ["zap-passive"]
+        assert set(main.jobs[queued.json()["id"]]["modules"]) == {"httpx", "zap-passive", "nuclei"}
+        assert main.jobs[queued.json()["id"]]["program"]["omitted_modules"] == ["nikto", "dalfox"]
+        assert main.jobs[queued.json()["id"]]["program"]["scope_profile"] == "origin"
 
 def test_escaped_23andme_style_header_is_deduplicated_and_resolves_username():
     policy = ("Requests must include header X-HackerOne-Research: " + chr(92) + "<YOUR-USERNAME>\n") * 2
@@ -423,3 +425,97 @@ def test_unvalidated_scanner_reports_exclusion_alone_is_not_an_automation_ban():
 def test_duplicate_upstream_policy_fields_are_displayed_once():
     policy = "User-Agent: Fixture\nReview exclusions before testing."
     assert discovery.plain({"policy": policy, "policy_setting": policy}).count("Review exclusions") == 1
+
+def test_program_agent_wins_over_identity_default_and_queue_agent():
+    main.assets.clear(); main.jobs.clear(); main.queue = asyncio.Queue()
+    with TestClient(main.app) as client, patch.object(main, "run_scan_job", no_scan), patch.object(main, "public_host"):
+        doc = load_program(client, fixture_page("User-Agent: Required-<username>"))
+        imported = import_program(client, doc, settings={"researcher": "fixture", "default_agent": "Wrong-Identity-Default"})
+        asset = imported.json()["web_asset_ids"][0]
+        queued = client.post("/api/scans/batch", json={"asset_ids": [asset],
+            "policy_confirmed": True, "active_confirmed": True, "modules": ["ffuf"],
+            "user_agent": "Wrong-Queue-Agent"})
+        assert queued.status_code == 200, queued.text
+        job = main.jobs[queued.json()["scans"][0]["id"]]
+        assert job["user_agent"] == "Required-fixture"
+        assert job["program"]["identity_source"] == "program rules"
+
+
+def test_default_agent_does_not_override_contains_requirement():
+    analysis = discovery.policy_analysis({"policy": "User-Agent must include Research-<username>"})
+    config = discovery.configure(analysis, discovery.PolicySettings(
+        researcher="fixture", default_agent="Wrong-Default"))
+    assert config["user_agent"] == discovery.DEFAULT_AGENT + " Research-fixture"
+    assert config["agent_source"] == "program rules"
+
+
+def test_required_header_remains_separate_from_fallback_user_agent():
+    main.assets.clear(); main.jobs.clear(); main.queue = asyncio.Queue()
+    with TestClient(main.app) as client, patch.object(main, "run_scan_job", no_scan), patch.object(main, "public_host"):
+        doc = load_program(client, fixture_page("Use X-HackerOne-Research: <username>"))
+        imported = import_program(client, doc, settings={"researcher": "fixture"})
+        asset = imported.json()["web_asset_ids"][0]
+        queued = client.post("/api/scans", json={"asset_id": asset, "policy_confirmed": True,
+            "active_confirmed": True, "modules": ["zap-passive", "ffuf"], "user_agent": "Queue-Fallback"})
+        assert queued.status_code == 200
+        job = main.jobs[queued.json()["id"]]
+        assert job["user_agent"] == "Queue-Fallback"
+        assert job["modules"] == ["zap-passive"]
+        assert job["program"]["scope_profile"] == "exact-url"
+
+
+def test_no_identification_rule_preview_labels_the_actual_default_source():
+    with TestClient(main.app) as client:
+        doc = load_program(client, fixture_page("Review program rules."))
+        response = client.post("/api/discovery/resolve", json={"programs": [{
+            "review_id": doc["review_id"], "settings": {"rules_reviewed": True, "default_agent": "Identity-Fixture"}}]})
+        preview = response.json()["programs"][0]
+        assert preview["ready"] and preview["user_agent"] == "Identity-Fixture"
+        assert preview["agent_source"] == "identity default"
+
+
+def test_prose_scope_offers_only_explicit_bullet_domains_for_review():
+    main.assets.clear()
+    prose = ("This is an expansive scope. All domains and subdomains owned by the company "
+             "are included. These include: * example.org * example.net "
+             "Other infrastructure is not an explicit target.")
+    rows = [dict(ROW, identifier="Any public infrastructure owned by Example", type="other", instructions=prose)]
+    with TestClient(main.app) as client:
+        doc = load_program(client, fixture_page("Review current rules.", rows))
+        candidates = [row for row in doc["assets"] if row.get("requires_scope_review")]
+        assert {row["identifier"] for row in candidates} == {"example.org", "*.example.org", "example.net", "*.example.net"}
+        assert doc["total"] == len(doc["assets"]) == 5
+        assert doc["analysis"]["review_required"]
+        chosen = next(row for row in candidates if row["identifier"] == "example.org")
+        response = import_program(client, doc, settings={"rules_reviewed": True}, selected=[chosen["id"]])
+        assert response.status_code == 200 and response.json()["imported"] == 1
+        response = import_program(client, doc, settings={"rules_reviewed": True}, selected=[chosen["id"]],
+                                  concrete=["https://not-listed.example/"])
+        assert response.status_code == 422
+
+
+def test_cloud_examples_and_policy_links_do_not_become_scope_candidates():
+    rows = [{"id": "generic", "identifier": "Any public cloud resource", "type": "other",
+             "instructions": "For example AWS S3, Azure blobs. Visit https://provider.example/."}]
+    assert discovery.scope_candidates(rows) == rows
+
+
+def test_unrelated_prose_and_other_host_exclusions_do_not_reduce_domain_pipeline():
+    main.assets.clear(); main.jobs.clear(); main.queue = asyncio.Queue()
+    exclusions = [dict(ROW, identifier="Any assets related to acquisitions", type="other"),
+                  dict(ROW, identifier="https://elsewhere.example/")]
+    with TestClient(main.app) as client, patch.object(main, "run_scan_job", no_scan), patch.object(main, "public_host"):
+        doc = load_program(client, fixture_page("Review rules.", exclusions=exclusions))
+        response = import_program(client, doc, settings={"rules_reviewed": True})
+        asset = response.json()["web_asset_ids"][0]
+        queued = client.post("/api/scans", json={"asset_id": asset, "policy_confirmed": True,
+            "active_confirmed": True, "modules": ["ffuf", "nikto", "zap-passive"]})
+        job = main.jobs[queued.json()["id"]]
+        assert set(job["modules"]) == {"ffuf", "nikto", "zap-passive"}
+        assert job["program"]["scope_profile"] == "host"
+
+
+@pytest.mark.parametrize("identifier", ["/private", "https://example.org/private", "https://*.example.org/private"])
+def test_same_origin_path_exclusions_keep_exact_url_profile(identifier):
+    target = "https://api.example.org/" if "*." in identifier else "https://example.org/"
+    assert discovery.exclusion_on_origin(identifier, target)
