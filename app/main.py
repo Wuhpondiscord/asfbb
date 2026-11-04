@@ -638,11 +638,13 @@ async def run_scan_job(identifier, spec):
         policy_token = request_policy.CURRENT.set(base_policy)
         flow = Flow(url, spec.options.httpx_limit) if spec.options.resource_handoffs and spec.options.reuse_discovery else None
         samples_token = request_policy.SAMPLES.set(flow.samples if flow else None)
+        events_token = request_policy.EVENTS.set([])
         endpoints = [url]
         endpoint_sources = {url: ["scope"]}
         # Modules execute in the user-selected order, sequentially, with bounded output.
         for position, module in enumerate(spec.modules):
             request_policy.CURRENT.set({**base_policy, "module": module})
+            request_policy.EVENTS.set([])
             policy_reason = request_policy.stage_reason(module)
             runtime_inputs, input_provenance = flow.inputs_for(module, spec.options.inputs) if flow else (spec.options.inputs, {})
             if input_provenance:
@@ -897,7 +899,15 @@ async def run_scan_job(identifier, spec):
                     log_event(job, "stage_exception", module=module,
                               error_type=exc.__class__.__name__)
                     result = {"status":"failed", "reason":"Module exception: "+exc.__class__.__name__}
+                if request_policy.EVENTS.get():
+                    result["reason"] = ("Program request policy blocked an out-of-scope native request; bounded coverage retained. " + str(result.get("reason", "")))[:500]
+                    result.update(early_stop=True, stop_reason="program_request_policy", coverage_complete=False)
+                    if result["status"] == "failed":
+                        result["status"] = "partial"
                 if input_provenance:
+                    if input_provenance.get("source") == "observed-javascript":
+                        for finding in result.get("alerts", []):
+                            finding["url"] = input_provenance["url"]
                     result["input_provenance"] = input_provenance
                     result["reason"] = (str(result.get("reason", "")) + "; automatic input: " + input_provenance["source"] + "; evidence remains unverified")[:500]
                 if flow and not policy_reason:
@@ -1031,3 +1041,5 @@ async def run_scan_job(identifier, spec):
             request_policy.CURRENT.reset(policy_token)
         if "samples_token" in locals():
             request_policy.SAMPLES.reset(samples_token)
+        if "events_token" in locals():
+            request_policy.EVENTS.reset(events_token)

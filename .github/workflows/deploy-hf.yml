@@ -171,6 +171,9 @@ jobs:
             /opt/asfb-venv/bin/python /app/tests/replay_cli_smoke.py
             /opt/asfb-venv/bin/python /app/tests/review_native_smoke.py
             ruby /app/tests/wpscan_keyless_smoke.rb
+            /opt/wafw00f/bin/python /app/tests/policy_engine_smoke.py requests
+            /opt/wapiti/bin/python /app/tests/policy_engine_smoke.py httpx
+            /opt/nettacker/bin/python /app/tests/policy_engine_smoke.py aiohttp
           '
       - name: Validate Hugging Face token
         env:

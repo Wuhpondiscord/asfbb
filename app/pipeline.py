@@ -55,6 +55,10 @@ async def execute(args, timeout):
         timed_out = True
         stop_process()
         out, err = await communication
+    if policy and "[asfb-policy] blocked" in clean_output(err):
+        from .request_policy import EVENTS
+        if EVENTS.get() is not None:
+            EVENTS.get().append("blocked")
     lines = clean_output(out).splitlines()[:config.PROCESS_OUTPUT_MAX_LINES]
     if timed_out or p.returncode:
         lines += ["[stderr] " + line[:200] for line in clean_output(err).splitlines()[-8:]]

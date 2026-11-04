@@ -8,10 +8,12 @@ import os
 import re
 import threading
 import time
+import sys
 from urllib.parse import parse_qsl, unquote, urlsplit
 
 CURRENT = contextvars.ContextVar("asfb_request_policy", default=None)
 SAMPLES = contextvars.ContextVar("asfb_private_samples", default=None)
+EVENTS = contextvars.ContextVar("asfb_policy_events", default=None)
 PYTHON_HTTP = {"arjun", "wafw00f", "wapiti", "graphw00f", "corsy", "takeover",
                "s3-review", "websocket", "vcs-artifacts", "idor-forge", "garak",
                "race-replay", "nosql", "nettacker"}
@@ -88,6 +90,11 @@ def allows(value, policy=None):
 
 def check(value, policy=None):
     if not allows(str(value), policy):
+        events = EVENTS.get()
+        if events is not None:
+            events.append("blocked")
+        if os.environ.get("ASFB_TARGET_POLICY"):
+            print("[asfb-policy] blocked", file=sys.stderr)
         raise PolicyBlocked("Program request policy blocked an out-of-scope URL")
 
 
