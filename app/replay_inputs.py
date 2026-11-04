@@ -173,6 +173,8 @@ class RaceReplay(ReplayProfile):
     @model_validator(mode="after")
     def fixtures(self):
         existing_field(self.request, self.field)
+        if self.control_value.startswith("REVIEW_") or self.parallel_value.startswith("REVIEW_"):
+            raise ValueError("Replace discovery draft placeholders with authorized fresh fixtures")
         if self.control_value == self.parallel_value or any(c in self.control_value + self.parallel_value for c in "\r\n\x00"):
             raise ValueError("Supply distinct fresh control and parallel fixture values")
         return self
@@ -186,6 +188,8 @@ class NoSQLReplay(ReplayProfile):
 
     @model_validator(mode="after")
     def baseline(self):
+        if existing_field(self.request, self.field).startswith("REVIEW_"):
+            raise ValueError("Replace the discovery draft placeholder with a known-working authorized baseline")
         if len(existing_field(self.request, self.field)) > 128:
             raise ValueError("Baseline field exceeds 128 characters")
         return self

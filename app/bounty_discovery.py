@@ -460,7 +460,9 @@ def prepare(owner, selection):
             exclusion_on_origin(x["identifier"], value)
             for x in doc["exclusions"])
         profile = "exact-url" if constrained else "origin" if "://" in row["identifier"] else ""
-        prepared.append((value, row, config, profile))
+        prepared.append((value, row, {**config, "target_policy": {
+            "path": scope_path, "query": scope_url.query,
+            "exclusions": [x["identifier"] for x in doc["exclusions"] if exclusion_on_origin(x["identifier"], value)]}}, profile))
     if not prepared:
         raise ValueError("Choose at least one explicit web target; selected wildcards require concrete URLs")
     return doc, prepared
@@ -474,44 +476,23 @@ def enforce_asset(owner, asset, spec):
         raise ValueError("This program binding expired; reload and import its current scope")
     doc = document(owner, binding["review_id"])
     config, restricted = binding["config"], binding["restricted"]
-    modules = list(spec.modules)
-    reasons = []
-    exact = restricted in (True, "exact-url") or bool(config["headers"]) or config["rate"] is not None
-    origin_only = restricted == "origin"
-    if exact:
-        modules = [m for m in modules if m == "zap-passive"]
-        reasons.append("Exact-URL ZAP profile enforces URL/path/exclusion/header/rate constraints")
-    elif origin_only:
-        # These profiles keep target HTTP requests on the selected origin or
-        # process supplied artifacts. Nikto/Dalfox have no equivalent guard here.
-        modules = [m for m in modules if m not in ("nikto", "dalfox")]
-        reasons.append("Website-root scope: same-origin pipeline; Nikto/Dalfox omitted because their origin guards are not verified")
-    if config["apply_agent"] and not exact:
-        before_identity = len(modules)
-        modules = [m for m in modules if m not in ("testssl", "garak")]
-        if len(modules) != before_identity:
-            reasons.append("TLS/LLM profiles without verified identity-header support omitted")
-    if not modules:
-        raise ValueError("Selected modules cannot enforce these rules; enable ZAP passive for this program")
     options = spec.options.model_copy(deep=True)
-    delay = spec.delay_seconds
-    if exact:
-        options.reuse_discovery = False
-        options.zap_endpoint_limit = 1
+    delay = max(spec.delay_seconds, 1 / config["rate"]) if config["rate"] is not None else spec.delay_seconds
+    if config["rate"] is not None:
         options.parallel_jobs = 1
-        if config["rate"] is not None:
-            delay = max(delay, 1 / config["rate"])
-    omitted = [m for m in spec.modules if m not in modules]
-    spec = spec.model_copy(update={"modules": modules, "options": options, "delay_seconds": delay,
-                                   "user_agent": config["user_agent"] if config["apply_agent"] else (config.get("default_agent") or spec.user_agent)})
+    agent = config["user_agent"] if config["apply_agent"] else (config.get("default_agent") or spec.user_agent)
+    spec = spec.model_copy(update={"options": options, "delay_seconds": delay, "user_agent": agent})
     spec._program_headers = config["headers"]
-    spec._program_origin = origin_only and not exact
+    spec._program_origin = True
+    spec._target_policy = {**config.get("target_policy", {}), "headers": config["headers"],
+                           "agent": agent, "delay": delay, "rate": config["rate"]}
     summary = {"id": doc["program_id"], "name": doc["name"], "url": doc["url"],
                "policy_revision": doc["revision"], "fetched_at": doc["source"].get("fetched_at"),
                "identity_applied": config["apply_agent"], "identity_source": config.get("agent_source", "program rules"),
-               "scope_profile": "exact-url" if exact else "origin" if origin_only else "host", "test_account_domains": config["email_domains"],
-               "manual_review": config["reviewed"], "constraints": reasons,
-               "omitted_modules": omitted}
+               "scope_profile": "policy-aware", "test_account_domains": config["email_domains"],
+               "manual_review": config["reviewed"],
+               "constraints": ["Selected modules retained; required HTTP headers, origin, path exclusions and pacing are checked per adapter at runtime"],
+               "omitted_modules": []}
     return spec, summary
 
 

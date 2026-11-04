@@ -129,7 +129,7 @@ def test_browse_filters_follow_public_summary_contract_without_details():
         assert client.get("/api/discovery/programs?platforms=unknown").status_code == 422
 
 
-def test_program_import_applies_agent_on_regular_queue_and_omits_unsupported_profiles():
+def test_program_import_applies_agent_without_omitting_selected_modules():
     main.assets.clear(); main.jobs.clear(); main.queue = asyncio.Queue()
     with TestClient(main.app) as client, patch.object(main, "run_scan_job", no_scan), patch.object(main, "public_host"):
         document = load_program(client, fixture_page())
@@ -140,13 +140,13 @@ def test_program_import_applies_agent_on_regular_queue_and_omits_unsupported_pro
             "active_confirmed": True, "modules": ["arjun", "testssl"], "user_agent": "wrong-global-agent"})
         assert queued.status_code == 200, queued.text
         job = main.jobs[queued.json()["id"]]
-        assert job["user_agent"] == "HackerOne-fixture" and job["modules"] == ["arjun"]
-        assert job["program"]["omitted_modules"] == ["testssl"]
+        assert job["user_agent"] == "HackerOne-fixture" and set(job["modules"]) == {"arjun", "testssl"}
+        assert job["program"]["omitted_modules"] == []
         assert "fixture@wearehackerone.com" not in json.dumps(job)
         assert job["program"]["policy_revision"]
 
 
-def test_path_scope_and_exclusions_use_exact_url_profile():
+def test_path_scope_keeps_modules_and_discovery_with_runtime_policy():
     main.assets.clear(); main.jobs.clear(); main.queue = asyncio.Queue()
     rows = [dict(ROW, identifier="https://example.org/app/", type="url")]
     with TestClient(main.app) as client, patch.object(main, "run_scan_job", no_scan), patch.object(main, "public_host"):
@@ -158,8 +158,8 @@ def test_path_scope_and_exclusions_use_exact_url_profile():
             "options": {"reuse_discovery": True, "zap_endpoint_limit": 5}})
         assert queued.status_code == 200, queued.text
         job = main.jobs[queued.json()["id"]]
-        assert job["modules"] == ["zap-passive"]
-        assert job["options"]["zap_endpoint_limit"] == 1 and job["options"]["reuse_discovery"] is False
+        assert set(job["modules"]) == {"zap-passive", "nikto", "katana"}
+        assert job["options"]["zap_endpoint_limit"] == 5 and job["options"]["reuse_discovery"] is True
 
 
 def test_explicit_exclusion_and_missing_review_are_atomic():
@@ -279,9 +279,9 @@ def test_root_website_scope_keeps_origin_compatible_pipeline():
         queued = client.post("/api/scans", json={"asset_id": response.json()["web_asset_ids"][0],
             "policy_confirmed": True, "active_confirmed": True, "modules": ["zap-passive", "httpx", "nuclei", "nikto", "dalfox"]})
         assert queued.status_code == 200, queued.text
-        assert set(main.jobs[queued.json()["id"]]["modules"]) == {"httpx", "zap-passive", "nuclei"}
-        assert main.jobs[queued.json()["id"]]["program"]["omitted_modules"] == ["nikto", "dalfox"]
-        assert main.jobs[queued.json()["id"]]["program"]["scope_profile"] == "origin"
+        assert set(main.jobs[queued.json()["id"]]["modules"]) == {"httpx", "zap-passive", "nuclei", "nikto", "dalfox"}
+        assert main.jobs[queued.json()["id"]]["program"]["omitted_modules"] == []
+        assert main.jobs[queued.json()["id"]]["program"]["scope_profile"] == "policy-aware"
 
 def test_escaped_23andme_style_header_is_deduplicated_and_resolves_username():
     policy = ("Requests must include header X-HackerOne-Research: " + chr(92) + "<YOUR-USERNAME>\n") * 2
@@ -460,8 +460,8 @@ def test_required_header_remains_separate_from_fallback_user_agent():
         assert queued.status_code == 200
         job = main.jobs[queued.json()["id"]]
         assert job["user_agent"] == "Queue-Fallback"
-        assert job["modules"] == ["zap-passive"]
-        assert job["program"]["scope_profile"] == "exact-url"
+        assert set(job["modules"]) == {"zap-passive", "ffuf"}
+        assert job["program"]["scope_profile"] == "policy-aware"
 
 
 def test_no_identification_rule_preview_labels_the_actual_default_source():
@@ -514,7 +514,7 @@ def test_unrelated_prose_and_other_host_exclusions_do_not_reduce_domain_pipeline
             "active_confirmed": True, "modules": ["ffuf", "nikto", "zap-passive"]})
         job = main.jobs[queued.json()["id"]]
         assert set(job["modules"]) == {"ffuf", "nikto", "zap-passive"}
-        assert job["program"]["scope_profile"] == "host"
+        assert job["program"]["scope_profile"] == "policy-aware"
 
 
 @pytest.mark.parametrize("identifier", ["/private", "https://example.org/private", "https://*.example.org/private"])

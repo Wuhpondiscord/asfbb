@@ -7,15 +7,20 @@ import tempfile
 import time
 from urllib.parse import urlsplit
 from . import config
+from .request_policy import allows
 
 def clean_output(data):
     value = data.decode("utf-8", "replace") if isinstance(data, bytes) else str(data)
     return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", value).replace("\r", "\n")
 
 async def execute(args, timeout):
+    from .request_policy import current, command
+    policy = current()
+    args = command(args, policy)
+    environment = {"env": {**os.environ, "ASFB_TARGET_POLICY": json.dumps(policy)}} if policy else {}
     try:
         p = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                                                 start_new_session=(os.name == "posix"))
+                                                 start_new_session=(os.name == "posix"), **environment)
     except FileNotFoundError:
         return ["Binary missing"], "unavailable"
     # communicate() owns the pipe readers. Cancelling it at the deadline and
@@ -334,7 +339,7 @@ async def probe(urls, host, agent, limit=1):
     """Probe exact-host URLs in bounded batches, avoiding one subprocess per URL."""
     targets = list(dict.fromkeys(
         u for u in urls if isinstance(u, str) and "\n" not in u and "\r" not in u
-        and in_host(u, host)))[:max(1, min(int(limit), config.HTTPX_LIMIT_MAX))]
+        and in_host(u, host) and allows(u)))[:max(1, min(int(limit), config.HTTPX_LIMIT_MAX))]
     if not targets:
         return {"status": "completed", "probes": [], "submitted": 0}
     all_rows = []

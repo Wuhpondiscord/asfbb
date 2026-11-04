@@ -22,7 +22,7 @@ jobs:
           ZAP_API_KEY: test-key
         run: python3 -m pytest -q tests/
       - name: Validate Python backend syntax
-        run: python3 -m py_compile app/bounty_discovery.py app/arjun_runner.py app/dalfox_runner.py app/replay_inputs.py app/replay_runner.py app/replay_modules.py app/protocol_runner.py app/protocol_modules.py app/analysis_modules.py app/waf_runner.py app/target_import.py app/planning.py app/coverage.py app/sampling.py app/concurrency.py app/idor_module.py app/idor_runner.py app/main.py app/pipeline.py app/web_modules.py app/client_modules.py app/wapiti_guard.py app/wapiti_runner.py app/config.py app/module_inputs.py app/final_modules.py app/final_module_names.py app/nettacker_runner.py app/garak_runner.py app/template_builder.py app/review.py app/zap_control.py app/scope.py app/jwtcheck.py app/storage.py
+        run: python3 -m py_compile app/request_policy.py app/policy_entry.py app/resource_flow.py app/bounty_discovery.py app/arjun_runner.py app/dalfox_runner.py app/replay_inputs.py app/replay_runner.py app/replay_modules.py app/protocol_runner.py app/protocol_modules.py app/analysis_modules.py app/waf_runner.py app/target_import.py app/planning.py app/coverage.py app/sampling.py app/concurrency.py app/idor_module.py app/idor_runner.py app/main.py app/pipeline.py app/web_modules.py app/client_modules.py app/wapiti_guard.py app/wapiti_runner.py app/config.py app/module_inputs.py app/final_modules.py app/final_module_names.py app/nettacker_runner.py app/garak_runner.py app/template_builder.py app/review.py app/zap_control.py app/scope.py app/jwtcheck.py app/storage.py
       - name: Validate dashboard JavaScript syntax
         run: |
           python3 - <<'PY'
@@ -65,6 +65,7 @@ jobs:
             /usr/local/bin/kr brute --help > /tmp/kr-help
             grep -q -- "--max-redirects" /tmp/kr-help
             grep -q -- "--force-method" /tmp/kr-help
+            grep -q -- "--header" /tmp/kr-help
             grep -q -- "--delay" /tmp/kr-help
             /usr/local/bin/amass enum -help > /tmp/amass-help 2>&1 || true
             grep -q -- "-passive" /tmp/amass-help
@@ -102,6 +103,7 @@ jobs:
             perl /opt/nikto/program/nikto.pl -Help > /tmp/nikto-help
             grep -q -- "-maxtime" /tmp/nikto-help
             grep -q -- "-Pause" /tmp/nikto-help
+            grep -qi -- "Add-header" /tmp/nikto-help
             bash /opt/testssl/testssl.sh --help > /tmp/testssl-help
             grep -q -- "-S" /tmp/testssl-help
             grep -q -- "--jsonfile" /tmp/testssl-help
@@ -128,6 +130,8 @@ jobs:
             grep -q -- "--skip-discovery" /tmp/dalfox-help
             grep -q -- "--skip-xss-scanning" /tmp/dalfox-help
             grep -q -- "--user-agent" /tmp/dalfox-help
+            grep -q -- "--headers" /tmp/dalfox-help
+            grep -q -- "--delay" /tmp/dalfox-help
             /usr/local/bin/gau --help > /tmp/gau-help 2>&1 || true
             grep -q -- "--providers" /tmp/gau-help
             grep -q -- "--config" /tmp/gau-help
@@ -137,15 +141,18 @@ jobs:
             grep -q -- "--output-dir" /tmp/sqlmap-help
             grep -q -- "--flush-session" /tmp/sqlmap-help
             grep -q -- "-A" /tmp/sqlmap-help
+            grep -q -- "--headers" /tmp/sqlmap-help
             /usr/local/bin/katana -h > /tmp/katana-help 2>&1 || true
             grep -q -- "-depth" /tmp/katana-help
             grep -q -- "-list" /tmp/katana-help
             grep -q -- "-crawl-scope" /tmp/katana-help
             grep -q -- "-disable-redirects" /tmp/katana-help
+            grep -q -- "-delay" /tmp/katana-help
             /usr/local/bin/pd-httpx -h > /tmp/httpx-help 2>&1 || true
             grep -q -- "-list" /tmp/httpx-help
             grep -q -- "-content-type" /tmp/httpx-help
             grep -q -- "-no-fallback-scheme" /tmp/httpx-help
+            grep -q -- "-delay" /tmp/httpx-help
             /usr/local/bin/ffuf -h > /tmp/ffuf-help 2>&1 || true
             grep -q -- "-json" /tmp/ffuf-help
             /opt/asfb-venv/bin/arjun -h > /tmp/arjun-help 2>&1 || true

@@ -27,6 +27,8 @@ from .web_modules import MODULES as WEB_MODULES, run_web_module, same_origin
 
 from . import nuclei_catalog
 from . import bounty_discovery
+from . import request_policy
+from .resource_flow import Flow
 
 ACTIVE_MODULES = ACTIVE_MODULES | WEB_MODULES
 
@@ -110,6 +112,7 @@ class PipelineOptions(BaseModel):
     request_budget: int = Field(default=config.ZAP_REQUEST_BUDGET_DEFAULT, ge=1, le=config.ZAP_REQUEST_BUDGET_MAX)
     zap_wait_seconds: int = Field(default=config.ZAP_PASSIVE_WAIT_SECONDS_DEFAULT, ge=15, le=config.ZAP_PASSIVE_WAIT_SECONDS_MAX)
     discovery_first: bool = True
+    resource_handoffs: bool = False
     order_mode: Literal["manual", "guided"] = "manual"
     reuse_discovery: bool = False
     coverage_profile: Literal["current", "quick", "balanced", "thorough"] = "current"
@@ -119,6 +122,7 @@ class ScanRequest(BaseModel):
     _program_headers: dict = PrivateAttr(default_factory=dict)
     _program_origin: bool = PrivateAttr(default=False)
     _zap_skip_reason: str = PrivateAttr(default="")
+    _target_policy: dict = PrivateAttr(default_factory=dict)
     asset_id: str
     policy_confirmed: bool = False
     user_agent: str = Field(default="ASFB-Research/0.1", max_length=300)
@@ -629,20 +633,33 @@ async def run_scan_job(identifier, spec):
         job["status"] = "running"
         log_event(job, "started")
         url, host = target_url(assets[spec.asset_id])
+        base_policy = {"target": url, "agent": spec.user_agent, "delay": spec.delay_seconds,
+                       "rate": None, **spec._target_policy}
+        policy_token = request_policy.CURRENT.set(base_policy)
+        flow = Flow(url, spec.options.httpx_limit) if spec.options.resource_handoffs and spec.options.reuse_discovery else None
+        samples_token = request_policy.SAMPLES.set(flow.samples if flow else None)
         endpoints = [url]
         endpoint_sources = {url: ["scope"]}
         # Modules execute in the user-selected order, sequentially, with bounded output.
         for position, module in enumerate(spec.modules):
+            request_policy.CURRENT.set({**base_policy, "module": module})
+            policy_reason = request_policy.stage_reason(module)
+            runtime_inputs, input_provenance = flow.inputs_for(module, spec.options.inputs) if flow else (spec.options.inputs, {})
+            if input_provenance:
+                log_event(job, "data_handoff", module=module, data="Observed resource/artifact input",
+                          diagnostics=input_provenance)
             if job["cancelled"]:
                 break
             async with module_slot(module, job, log_event,
-                                   enabled=(module not in ('depscan', 'trivy') or bool(spec.options.inputs.sbom_text))
+                                   enabled=(module not in ('depscan', 'trivy') or bool(runtime_inputs.sbom_text))
                                    and (module != "race-replay" or spec.options.inputs.race is not None and (
                                        not spec.options.inputs.race.target_origin or same_origin(spec.options.inputs.race.target_origin, url)))
                                    and (module != "nosql" or spec.options.inputs.nosql is not None and (
                                        not spec.options.inputs.nosql.target_origin or same_origin(spec.options.inputs.nosql.target_origin, url)))
                                    and (module != "zap-passive" or not spec._zap_skip_reason)):
                 unresolved = False
+                if base_policy.get("rate") is not None and not policy_reason:
+                    await asyncio.sleep(spec.delay_seconds)
                 try:
                     public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
                 except DNSResolutionFailed:
@@ -655,7 +672,9 @@ async def run_scan_job(identifier, spec):
                 job["progress"] = round(position * 100 / len(spec.modules))
                 job["pipeline"][module] = "running"
                 try:
-                    if unresolved and module != "takeover":
+                    if policy_reason:
+                        result = {"status": "skipped", "reason": policy_reason, "alerts": [], "output": policy_reason}
+                    elif unresolved and module != "takeover":
                         result = {"status": "skipped", "reason": "Target DNS unresolved; only DNS takeover evidence is applicable", "alerts": []}
                     elif module == "gau":
                         result = await gau(url, host, spec.options.endpoint_limit, spec.options.gau_mode)
@@ -678,7 +697,15 @@ async def run_scan_job(identifier, spec):
                         endpoints = list(dict.fromkeys(endpoints + result["endpoints"]))[:spec.options.endpoint_limit]
                         job["endpoints"] = endpoints[1:]
                     elif module == "httpx":
-                        result = await probe(endpoints, host, spec.user_agent, spec.options.httpx_limit)
+                        if flow:
+                            await flow.check_new(spec.user_agent, count=spec.options.httpx_limit)
+                            reused = [{"url": item["url"], "status_code": item["status_code"],
+                                       "content_type": item.get("content_type", ""), "source": "resource-check"}
+                                      for item in flow.records.values() if type(item.get("status_code")) is int]
+                            result = {"status": "completed", "probes": reused,
+                                      "reason": "HTTPX stage reused scoped live HTTP metadata; duplicate probes avoided"}
+                        else:
+                            result = await probe(endpoints, host, spec.user_agent, spec.options.httpx_limit)
                         job["probes"] = result["probes"]
                     elif module == "zap-passive" and spec._zap_skip_reason:
                         result = {"status": "skipped", "reason": spec._zap_skip_reason, "alerts": []}
@@ -796,7 +823,7 @@ async def run_scan_job(identifier, spec):
                                           if spec.options.coverage_profile != "current" else {})
                         result = await run_web_module(
                             module, module_url, host, spec.user_agent, spec.delay_seconds,
-                            endpoints, spec.options.inputs, **profile_kwargs)
+                            ([item["url"] for item in flow.records.values() if item.get("status_code") in (200, 201, 204, 405)] if flow else endpoints), runtime_inputs, **profile_kwargs)
                         if module == "wafw00f":
                             job["waf"] = result.get("waf") or {"vendors": [], "requests": 0}
                         job["reviews"].append(result)
@@ -870,13 +897,41 @@ async def run_scan_job(identifier, spec):
                     log_event(job, "stage_exception", module=module,
                               error_type=exc.__class__.__name__)
                     result = {"status":"failed", "reason":"Module exception: "+exc.__class__.__name__}
+                if input_provenance:
+                    result["input_provenance"] = input_provenance
+                    result["reason"] = (str(result.get("reason", "")) + "; automatic input: " + input_provenance["source"] + "; evidence remains unverified")[:500]
+                if flow and not policy_reason:
+                    flow.ingest_components(result.get("components", []))
+                    for cached_url, sample in list(flow.samples.items()):
+                        if cached_url != sample[2]:
+                            continue
+                        flow.add(cached_url, "sampled-" + module)
+                        if cached_url in flow.records:
+                            from .resource_flow import kind as resource_kind
+                            flow.records[cached_url].update(checked=True, status_code=200,
+                                content_type=sample[1], kind=resource_kind(cached_url, sample[1]))
+                    for candidate in endpoints:
+                        flow.add(candidate, module if candidate in result.get("endpoints", []) else "pipeline")
+                    if module in ("gau", "katana", "ffuf", "kiterunner", "httpx"):
+                        checked = await flow.check_new(spec.user_agent, count=2 if module == "gau" else 5)
+                        existing_probes = {p.get("url"): p for p in job.get("probes", [])}
+                        for item in checked:
+                            if type(item.get("status_code")) is int:
+                                existing_probes[item["url"]] = {"url": item["url"], "status_code": item["status_code"],
+                                    "content_type": item.get("content_type", ""), "source": "resource-check"}
+                        job["probes"] = list(existing_probes.values())
+                        endpoints = list(dict.fromkeys(endpoints + list(flow.records)))[:spec.options.endpoint_limit]
+                        for item in checked:
+                            log_event(job, "resource_checked", module=module, selected_url=item["url"],
+                                      diagnostics={k: item[k] for k in ("status_code", "kind", "sample_limited", "check_error") if k in item})
+                    job["discovery"] = flow.public()
                 if spec._program_origin:
                     # Filter each handoff before any later module can consume it.
-                    endpoints = [candidate for candidate in endpoints if same_origin(candidate, url)]
+                    endpoints = [candidate for candidate in endpoints if same_origin(candidate, url) and request_policy.allows(candidate)]
                     job["endpoints"] = endpoints[1:]
                     for field in ("probes", "parameters", "alerts"):
                         job[field] = [item for item in job.get(field, [])
-                                      if same_origin(item.get("url", ""), url)]
+                                      if same_origin(item.get("url", ""), url) and request_policy.allows(item.get("url", ""))]
                 job["pipeline"][module] = result["status"]
                 summary = str(result.get("output") or "")
                 if not summary:
@@ -971,3 +1026,8 @@ async def run_scan_job(identifier, spec):
         job["stage"] = "failed"
         job["error"] = exc.__class__.__name__
         log_event(job, "failed", error_type=exc.__class__.__name__)
+    finally:
+        if "policy_token" in locals():
+            request_policy.CURRENT.reset(policy_token)
+        if "samples_token" in locals():
+            request_policy.SAMPLES.reset(samples_token)

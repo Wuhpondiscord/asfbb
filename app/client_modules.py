@@ -96,6 +96,24 @@ def parse_retire(report, mapping):
     return results[:config.WEB_FINDINGS_LIMIT]
 
 
+def retire_components(report):
+    """Retain inventory even when the engine reports no matching advisories."""
+    result, seen = [], set()
+    for entry in report.get("data", []) if isinstance(report, dict) else []:
+        if not isinstance(entry, dict):
+            continue
+        for item in entry.get("results", []):
+            if not isinstance(item, dict):
+                continue
+            name, version = item.get("component"), item.get("version")
+            if not isinstance(name, str) or not isinstance(version, str) or len(name) > 100 or len(version) > 80:
+                continue
+            if (name, version) not in seen:
+                seen.add((name, version))
+                result.append({"component": name, "version": version, "evidence": "native fingerprint; unverified"})
+    return result[:100]
+
+
 async def retirejs(url, host, agent, delay, discovered, profile="current"):
     settings = coverage_settings(profile)
     limit = config.RETIRE_MAX_FILES if profile == "current" else settings["retire_files"]
@@ -260,7 +278,7 @@ async def retirejs(url, host, agent, delay, discovered, profile="current"):
         reasons.append(str(coverage["missing_inventory_scripts"]) + " unavailable inventory-only script URLs excluded (HTTP 404/410)")
     reasons.append("Bounded JavaScript sample using the image-bundled advisory snapshot")
     return {"status": status, "source": "retirejs", "target": url, "alerts": findings,
-            "sampled_files": len(samples), "coverage": coverage,
+            "sampled_files": len(samples), "coverage": coverage, "components": retire_components(report),
             **({"early_stop": True, "stop_reason": "sampling_policy", "coverage_complete": False} if early_stop else {}),
             "reason": "; ".join(dict.fromkeys(reasons))[:500],
             "output": f"Retire.js: engine {execution_state}; {len(samples)}/{coverage['eligible_files']} eligible files sampled; {len(findings)} unverified advisory matches; coverage: {'limited' if coverage['coverage_limited'] else 'complete'}"}

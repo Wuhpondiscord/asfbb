@@ -24,3 +24,21 @@ raise 'redirect following was not disabled' unless
   raise "scope guard failed for #{url}" unless blocked
 end
 puts 'WPScan scope guard: offline checks passed'
+ENV['ASFB_TARGET_POLICY'] = JSON.generate({
+  'path' => '/blog/', 'headers' => {'X-HackerOne-Research' => 'fixture'}, 'agent' => 'Required-Fixture',
+  'exclusions' => ['/blog/private/']
+})
+browser.forge_request('https://example.org/blog/page', headers: {'User-Agent' => 'Wrong'})
+raise 'mandatory header absent' unless browser.seen[1][:headers]['X-HackerOne-Research'] == 'fixture'
+raise 'agent precedence lost' unless browser.seen[1][:headers]['User-Agent'] == 'Required-Fixture'
+['https://example.org/outside', 'https://example.org/blog/private/item', 'https://example.org/blog/%252e%252e/outside'].each do |url|
+  blocked = false
+  begin
+    browser.forge_request(url)
+  rescue ArgumentError
+    blocked = true
+  end
+  raise 'program path/exclusion guard failed' unless blocked
+end
+ENV.delete('ASFB_TARGET_POLICY')
+puts 'WPScan program headers/path exclusions: offline checks passed'

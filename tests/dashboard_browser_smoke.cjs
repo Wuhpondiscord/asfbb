@@ -16,6 +16,8 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
   {id:'job-two',target:'https://beta.example.org/',status:'partial',created:now-60,stage:'partial',progress:100,request_count:1,modules:['gau'],pipeline:{gau:'timeout'},alerts:[],endpoints:[],stage_details:{gau:{status:'timeout',elapsed_ms:12000,reason:'Common Crawl deadline',summary:'Partial archive coverage'}}},
   {id:'job-three',target:'https://gamma.example.org/',status:'queued',created:now-10,stage:'queued',progress:0,request_count:0,modules:['zap-passive'],pipeline:{},alerts:[],endpoints:[]}
  ];
+ jobs[0].discovery={checked:1,check_limit:10,dependency_candidates:1,resources:[{url:'https://alpha.example.org/app.js',checked:true,status_code:200,kind:'javascript',sources:['katana']}],
+  suggestions:[{kind:'garak',url:'https://alpha.example.org/api/generate',evidence:'Documented JSON prompt and response schemas; review required',review_required:true,inputs:{llm_path:'/api/generate',prompt_field:'prompt',response_field:'response'}}]};
  const events=[
   {event_id:'e1',time:now-10,job_id:'job-one',target:jobs[0].target,event:'stage_started',module:'idor-forge',level:'info'},
   {event_id:'e2',time:now-8,job_id:'job-two',target:jobs[1].target,event:'stage_finished',module:'gau',status:'timeout',level:'warning',elapsed_ms:12000,reason:'Common Crawl deadline',diagnostics:{providers:[{provider:'commoncrawl',status:'timeout'}]}},
@@ -412,6 +414,12 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
  const savedIdentity=await page.evaluate(()=>{const pair=document.cookie.split(';').map(s=>s.trim()).find(s=>s.startsWith('asfb_pref_identity_defaults='));return pair?JSON.parse(decodeURIComponent(pair.slice(pair.indexOf('=')+1))):{values:{}}});
  assert.equal(savedIdentity.values.values,undefined);
  assert.equal(await page.locator('nav.tabs button').last().getAttribute('id'),'tab-settings');
+ // Resource evidence is visible and review drafts do not enable modules or queue jobs.
+ const beforeDraft=await page.evaluate(()=>enabledModules());
+ await page.evaluate(()=>useDiscoveryDraft('job-one',0));
+ assert.equal(JSON.parse(await page.locator('#moduleTargetInputs').inputValue())['https://alpha.example.org/'].llm_path,'/api/generate');
+ assert.deepEqual(await page.evaluate(()=>enabledModules()),beforeDraft);
+ await page.locator('#moduleTargetInputs').fill('');
  // Queue a real dashboard batch with replay, IDOR, source and per-target inputs.
  batchAccountEnabled=true;
  await page.evaluate(async ()=>{

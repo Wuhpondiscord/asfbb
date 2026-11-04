@@ -33,6 +33,10 @@ def plan(modules, mode="manual", reuse=False):
     edges.update({("gau", "katana"), ("arjun", "dalfox"), ("arjun", "sqlmap"),
                   ("httpx", "arjun"), ("httpx", "retirejs"), ("httpx", "zap-passive"),
                   ("httpx", "nuclei")})
+    if reuse:
+        edges.update({(p, c) for p in URL_PRODUCERS for c in ("retirejs", "semgrep", "trufflehog", "garak", "nosql", "race-replay")})
+        edges.update({("httpx", c) for c in ("semgrep", "trufflehog", "garak", "nosql", "race-replay")})
+        edges.update({("retirejs", c) for c in ("depscan", "trivy", "osv-scanner")})
     edges.update({("wafw00f", c) for c in ("ffuf", "nuclei", "nikto", "wpscan", "wapiti", "arjun", "dalfox", "sqlmap", "race-replay", "nosql")})
     if reuse:
         edges.update({("httpx", c) for c in ("nikto", "wpscan", "wapiti", "corsy")})
