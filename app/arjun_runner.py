@@ -48,7 +48,9 @@ def run(argv):
             if code in (400, 413, 418, 429) or code >= 500:
                 response.close()
                 raise Stop("http_unavailable", code)
-            if code >= 400:
+            # A missing baseline is inapplicable. Later 404/410 responses can
+            # be parameter-dependent differences for native Arjun to compare.
+            if code >= 400 and not (code in (404, 410) and stats["requests"] > 1):
                 response.close()
                 raise Stop("endpoint_unavailable", code)
             content = bytearray()

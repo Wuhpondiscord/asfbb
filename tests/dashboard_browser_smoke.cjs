@@ -365,6 +365,18 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
  assert((await page.locator('#discoveryImportStatus').textContent()).includes('Skipped 1'));
  await page.evaluate(()=>preferenceStore.flush());
  assert(!JSON.stringify(await page.context().cookies()).includes('fixture-private'));
+ // Conditional account instructions and scanner discouragement remain distinct.
+ await page.evaluate(()=>{
+  discoveryState.reviews=[{review_id:'review-discouraged',title:'Manual testing program',program_id:'hackerone:manual',
+   url:'https://hackerone.com/manual',assets:[{id:'scope-manual',identifier:'example.org',type:'domain'}],
+   analysis:{user_agents:[],headers:[],email_domains:[],conditional_email_domains:['wearehackerone.com'],
+    automation_discouraged:true,automation_prohibited:false,review_required:true,review_reasons:['Review conditional account instructions'],text:'Manual testing instructions'}}];
+  renderDiscoveryReviews();
+ });
+ assert((await page.locator('#discoveryRuleCards').textContent()).includes('discourage automated vulnerability scanning'));
+ assert((await page.locator('#discoveryRuleCards').textContent()).includes('Conditional email-testing instructions'));
+ assert.equal(await page.locator('[data-policy-email="0"]').count(),0);
+ assert(await page.locator('[data-scope-id="scope-manual"]').isDisabled());
  // Identity defaults are retained only after an explicit opt-in.
  await page.locator('#tab-settings').click();await page.locator('[data-settings="identity"]').click();
  await page.locator('#replacementResearcher').fill('saved-researcher');

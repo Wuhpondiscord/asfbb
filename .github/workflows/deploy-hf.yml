@@ -161,6 +161,7 @@ jobs:
             /opt/protocol/bin/python /app/tests/protocol_offline_smoke.py
             /opt/asfb-venv/bin/python /app/tests/replay_cli_smoke.py
             /opt/asfb-venv/bin/python /app/tests/review_native_smoke.py
+            ruby /app/tests/wpscan_keyless_smoke.rb
           '
       - name: Validate Hugging Face token
         env:

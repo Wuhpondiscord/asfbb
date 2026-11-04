@@ -184,3 +184,27 @@ def test_report_size_is_bounded(tmp_path):
     report.write_text('["too long"]')
     with patch.object(web.config, "WEB_REPORT_MAX_BYTES", 2):
         assert web.read_report(report) is None
+@pytest.mark.parametrize("token,enumeration", [("", "p,t"), ("   ", "p,t"), ("fixture-token", "vp,vt")])
+def test_wpscan_selects_keyless_inventory_without_vulnerable_enumeration(monkeypatch, token, enumeration):
+    monkeypatch.setenv("WPSCAN_API_TOKEN", token)
+    args = web.command("wpscan", "https://example.org/", "example.org", "Fixture", "/tmp/report.json", 1.5)
+    assert args[args.index("--enumerate") + 1] == enumeration
+    assert args[args.index("--user-agent") + 1] == "Fixture"
+    assert "--api-token" not in args
+    for option in ("--detection-mode", "--plugins-detection", "--themes-detection"):
+        assert args[args.index(option) + 1] == "passive"
+
+
+def test_wpscan_keyless_valid_report_completes_with_coverage_limitation(monkeypatch):
+    monkeypatch.delenv("WPSCAN_API_TOKEN", raising=False)
+    async def preflight(*args): return "https://example.org/", "WordPress marker"
+    async def execute(args, deadline):
+        assert args[args.index("--enumerate") + 1] == "p,t"
+        Path(args[args.index("--output") + 1]).write_text(json.dumps({
+            "interesting_findings": [{"url": "https://example.org/", "to_s": "WordPress observation"}],
+            "plugins": {"fixture-plugin": {"version": {"number": "1.0"}}}}))
+        return [], "completed"
+    with patch.object(web, "public_host"), patch.object(web, "wordpress_preflight", preflight), patch.object(web, "execute", execute):
+        result = asyncio.run(web.run_web_module("wpscan", "https://example.org/", "example.org", "Test"))
+    assert result["status"] == "completed" and len(result["alerts"]) == 1
+    assert "Keyless passive" in result["reason"] and "database coverage is unavailable" in result["reason"]

@@ -43,6 +43,31 @@ for code, status, reason in [(400, "partial", "http_unavailable"), (429, "partia
         assert data["http_status"] == code
         assert "fixture-private" not in report.read_text()
 
+# A parameter probe returning 404 after healthy baselines must reach native
+# anomaly handling, rather than becoming a false endpoint-unavailable abort.
+calls = []
+def late_missing(session, method, url, **kwargs):
+    calls.append(url)
+    response = requests.Response()
+    response.status_code = 404 if len(calls) == 5 else 200
+    response.headers["Content-Type"] = "text/html"
+    response.url = url
+    response._content = b"<html>fixture page</html>"
+    response._content_consumed = True
+    return response
+with tempfile.TemporaryDirectory() as directory:
+    report = Path(directory) / "guard.json"
+    words = Path(directory) / "words.txt"
+    words.write_text("fixture\n")
+    with patch.object(arjun_runner, "public_host"), patch.object(requests.sessions.Session, "request", late_missing):
+        result = arjun_runner.run(["-u", "https://example.org/", "-w", str(words),
+            "-t", "1", "-c", "1", "--rate-limit", "1000", "--disable-redirects",
+            "--asfb-report", str(report)])
+    data = json.loads(report.read_text())
+    assert len(calls) >= 5 and result == 0 and data["status"] == "completed", data
+    assert data.get("stop_reason") != "endpoint_unavailable", data
+print("Installed Arjun late parameter 404 regression passed; network disabled")
+
 args = ["/usr/local/bin/dalfox", "scan", "https://example.org?q=fixture-private",
         "--scan-timeout", "300", "-o", "/tmp/fixture-report.json"]
 notice = "[scan] https://example.org/?q=fixture-private exceeded --scan-timeout (300s); cancelling target (stops at next checkpoint)"

@@ -77,7 +77,7 @@ def plain(value):
         parser.feed(value)
         return html.unescape("".join(parser.parts))
     if isinstance(value, dict):
-        return "\n".join(plain(v) for k, v in value.items() if k not in ("raw", "id", "uuid"))
+        return "\n".join(dict.fromkeys(plain(v) for k, v in value.items() if k not in ("raw", "id", "uuid")))
     if isinstance(value, list):
         return "\n".join(plain(v) for v in value)
     return ""
@@ -97,13 +97,18 @@ def policy_analysis(rules, instructions="", partial=False):
     text = clean_template((plain(rules) + "\n" + instructions).strip())
     lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines() if line.strip()]
     agents, emails, headers, evidence, review = [], set(), [], [], []
-    rates, blocked = [], False
+    rates, blocked, discouraged = [], False, False
+    conditional_emails = set()
     for line in lines:
         lower = line.lower()
         recognized = False
         if re.search(r"(?:automated|automatic|vulnerability)\s+(?:scann(?:ing|ers?)|tools?|testing)\s+(?:is\s+|are\s+)?(?:not allowed|not permitted|prohibited|forbidden)|do not use.{0,30}(?:automated|automatic).{0,20}scann|\bno\s+(?:automated|automatic)\s+(?:scann|testing)", lower):
             blocked = True
             evidence.append({"kind": "automation", "text": line[:600]})
+            recognized = True
+        if re.search(r"(?:do(?:n['’]t| not)|don['’]t) need help (?:with |running )?(?:automated|automatic) (?:vulnerability )?scann|(?:automated|automatic) (?:vulnerability )?scann(?:ers?|ing) (?:is |are )?(?:discouraged|unwelcome)", lower):
+            discouraged = True
+            evidence.append({"kind": "automation_discouraged", "text": line[:600]})
             recognized = True
         match = re.search(r"user[- ]agent(?:\s+header)?\s*(?:must\s+(?:be|include)|should\s+(?:be|include)|to|as|=|:|include|contains?)\s*(.+)", line, re.I)
         if match:
@@ -126,7 +131,10 @@ def policy_analysis(rules, instructions="", partial=False):
                 if "wearehackerone.com" in lower and "wearehackerone.com" not in domains:
                     domains.append("wearehackerone.com")
                 if domains:
-                    emails.update(d.rstrip(".") for d in domains)
+                    conditional = bool(re.search(r"where possible|if (?:you are |you'?re )?testing.{0,100}email|when testing.{0,100}email", lower))
+                    (conditional_emails if conditional else emails).update(d.rstrip(".") for d in domains)
+                    if conditional:
+                        review.append("Conditional email-testing instructions need review; accounts are not configured by this scanner")
                     evidence.append({"kind": "test_account", "text": line[:600]})
                     recognized = True
         agent_span = match.span(1) if match else None
@@ -157,8 +165,10 @@ def policy_analysis(rules, instructions="", partial=False):
         review.append("No supported identification requirements were found")
     if re.search(r"see (?:the )?(?:linked|external|additional)|rules.{0,20}https?://", text, re.I):
         review.append("Referenced instructions may need separate review")
-    return {"user_agents": agents[:4], "email_domains": sorted(emails)[:5], "headers": headers[:5],
+    return {"user_agents": agents[:4], "email_domains": sorted(emails)[:5],
+            "conditional_email_domains": sorted(conditional_emails - emails)[:5], "headers": headers[:5],
             "max_rps": min(rates) if rates else None, "automation_prohibited": blocked,
+            "automation_discouraged": discouraged,
             "review_required": bool(review), "review_reasons": list(dict.fromkeys(review)),
             "evidence": evidence[:30], "text": text[:250000], "partial": partial}
 
@@ -181,7 +191,12 @@ def substitute(value, researcher, replacements=None, test_email=""):
         if len(key) > 100 or not replacement_key(key) or not printable(replacement):
             raise ValueError("Custom replacements need a token name and bounded printable value")
         normalized = replacement_key(key)
-        lookup[normalized] = replacement
+        wrapped = re.fullmatch(r"<([A-Za-z0-9_.@+-]+)>", replacement)
+        lookup[normalized] = wrapped.group(1) if wrapped else replacement
+    # Treat example brackets around the configured handle as resolved identity.
+    # Unknown source tokens still require an explicit replacement.
+    if researcher:
+        lookup.setdefault(replacement_key(researcher), researcher)
     pattern = r"\{\{[^{}\r\n]{1,100}\}\}|<[^<>\r\n]{1,100}>|\{[^{}\r\n]{1,100}\}|\[[^\[\]\r\n]{1,100}\]|\bYOUR[-_ ](?:HACKERONE[-_ ])?USERNAME\b"
     def replace(match):
         key = replacement_key(match.group())
@@ -199,6 +214,8 @@ def substitute(value, researcher, replacements=None, test_email=""):
 def configure(analysis, settings):
     if analysis["automation_prohibited"]:
         raise ValueError("Published rules prohibit automated scanning; this program cannot be queued")
+    if analysis.get("automation_discouraged"):
+        raise ValueError("Published rules discourage automated vulnerability scanning; this program is skipped for manual testing")
     if analysis["review_required"] and not settings.rules_reviewed:
         raise ValueError("Confirm that you reviewed this program's current rules and configured the requirements")
     if not settings.test_email and analysis["email_domains"]:

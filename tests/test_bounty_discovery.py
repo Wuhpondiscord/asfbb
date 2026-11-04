@@ -367,3 +367,59 @@ def test_missing_review_is_skipped_but_invalid_ready_scope_stays_atomic():
 def test_custom_replacements_cannot_inject_headers(value):
     with pytest.raises(ValueError):
         discovery.substitute("<TEAM>", "wuhp", {"TEAM": value})
+
+def test_wrapped_concrete_handle_and_explicit_replacement_are_not_new_tokens():
+    analysis = discovery.policy_analysis({"policy": "User-Agent: Fixture"})
+    configured = discovery.configure(analysis, discovery.PolicySettings(
+        researcher="wuhp", custom_agent="Research-<wuhp>", rules_reviewed=True))
+    assert configured["user_agent"] == "Research-wuhp"
+    assert discovery.substitute("Research-<TEAM>", "wuhp", {"TEAM": "<wuhp>"}) == "Research-wuhp"
+    with pytest.raises(ValueError, match="Set an identity replacement"):
+        discovery.substitute("Research-<unknown>", "wuhp")
+
+
+def test_yelp_style_conditional_email_and_discouraged_scanners_are_distinct():
+    policy = (
+        "If you are testing a feature that involves an email component, use an "
+        "\x60@wearehackerone.com\x60 account where possible.\n"
+        "We don't need help running automated vulnerability scanners. We've got those covered.\n"
+        "Unvalidated vulnerabilities reported by automated tools/scanners are out of scope."
+    )
+    analysis = discovery.policy_analysis({"policy": policy})
+    assert analysis["email_domains"] == []
+    assert analysis["conditional_email_domains"] == ["wearehackerone.com"]
+    assert analysis["automation_discouraged"] and not analysis["automation_prohibited"]
+    with pytest.raises(ValueError, match="discourage automated"):
+        discovery.configure(analysis, discovery.PolicySettings(
+            researcher="wuhp", custom_agent="<wuhp>", rules_reviewed=True,
+            test_email="wuhp@wearehackerone.com", test_account_confirmed=True))
+
+
+def test_conditional_email_instruction_requires_review_not_unrelated_account_setup():
+    analysis = discovery.policy_analysis({"policy":
+        "If testing email features, use @wearehackerone.com where possible.\nUser-Agent: Fixture"})
+    assert analysis["review_required"]
+    with pytest.raises(ValueError, match="reviewed"):
+        discovery.configure(analysis, discovery.PolicySettings())
+    assert discovery.configure(analysis, discovery.PolicySettings(rules_reviewed=True))["user_agent"] == "Fixture"
+
+
+def test_mandatory_email_rule_is_preserved_alongside_conditional_advice():
+    analysis = discovery.policy_analysis({"policy":
+        "If testing email features, use @wearehackerone.com where possible.\n"
+        "You must use @wearehackerone.com for all testing accounts."})
+    assert analysis["email_domains"] == ["wearehackerone.com"]
+    assert analysis["conditional_email_domains"] == []
+    with pytest.raises(ValueError, match="testing email"):
+        discovery.configure(analysis, discovery.PolicySettings(rules_reviewed=True))
+
+
+def test_unvalidated_scanner_reports_exclusion_alone_is_not_an_automation_ban():
+    analysis = discovery.policy_analysis({"policy":
+        "Unvalidated vulnerabilities reported by automated tools/scanners are out of scope."})
+    assert not analysis["automation_prohibited"] and not analysis["automation_discouraged"]
+
+
+def test_duplicate_upstream_policy_fields_are_displayed_once():
+    policy = "User-Agent: Fixture\nReview exclusions before testing."
+    assert discovery.plain({"policy": policy, "policy_setting": policy}).count("Review exclusions") == 1

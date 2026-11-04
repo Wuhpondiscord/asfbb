@@ -164,10 +164,10 @@ def command(module, target, host, agent, report, delay):
                 "-useragent", agent, "-Format", "json", "-output", report]
     if module == "wpscan":
         return ["ruby", "/app/app/wpscan_runner.rb", "--url", target,
-                "--scope", host, "--detection-mode", "passive",
+                "--scope", host, "--user-agent", agent, "--detection-mode", "passive",
                 "--plugins-detection", "passive", "--plugins-version-detection", "passive",
                 "--themes-detection", "passive", "--themes-version-detection", "passive",
-                "--enumerate", "vp,vt", "--max-threads", "1",
+                "--enumerate", "vp,vt" if os.environ.get("WPSCAN_API_TOKEN", "").strip() else "p,t", "--max-threads", "1",
                 "--throttle", str(round(float(pause) * 1000)),
                 "--request-timeout", "5", "--connect-timeout", "5",
                 "--max-response-size", "1", "--max-scan-duration", str(config.WPSCAN_SCAN_SECONDS),
@@ -245,8 +245,8 @@ async def run_web_module(module, url, host, agent, delay=1.5, discovered=None, i
         if status in ("completed", "findings"):
             status = "failed"
         reasons.append("No readable bounded JSON report was produced")
-    if module == "wpscan" and not os.environ.get("WPSCAN_API_TOKEN"):
-        reasons.append("No WPSCAN_API_TOKEN: inventory only; vulnerability database coverage is unavailable")
+    if module == "wpscan" and not os.environ.get("WPSCAN_API_TOKEN", "").strip():
+        reasons.append("Keyless passive popular-plugin/theme inventory; vulnerability database coverage is unavailable without optional WPSCAN_API_TOKEN")
     if module == "testssl":
         reasons.append("Limited TLS server-defaults profile; exhaustive TLS tests are not enabled")
     # Never include raw report metadata or credentials in persisted results.
