@@ -169,6 +169,15 @@ def command(args, policy):
             args.extend([flag, str(value)])
     if module in PYTHON_HTTP and args and "python" in os.path.basename(args[0]):
         return [args[0], "-m", "app.policy_entry"] + args[1:]
+    if policy.get("agent"):
+        if module in ("katana", "httpx", "nuclei", "ffuf"):
+            existing = next((i for i in range(len(args) - 1) if args[i] == "-H" and args[i + 1].lower().startswith("user-agent:")), None)
+            if existing is None:
+                args.extend(["-H", "User-Agent: " + policy["agent"]])
+            else:
+                args[existing + 1] = "User-Agent: " + policy["agent"]
+        elif module in ("dalfox", "sqlmap", "nikto", "kiterunner"):
+            replace({"dalfox": "--user-agent", "sqlmap": "-A", "nikto": "-useragent", "kiterunner": "--user-agent"}[module], policy["agent"])
     if module in ("katana", "httpx", "nuclei", "ffuf", "dalfox", "nikto", "kiterunner"):
         flag = {"dalfox": "--headers", "nikto": "-Add-header", "kiterunner": "--header"}.get(module, "-H")
         for name, value in extra.items():

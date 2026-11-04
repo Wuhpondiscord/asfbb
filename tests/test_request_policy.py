@@ -76,3 +76,10 @@ def test_query_scope_cannot_gain_unreviewed_parameters():
     p = {**POLICY, "query": "id=1"}
     assert policy.allows("https://example.org/app/page?id=1", p)
     assert not policy.allows("https://example.org/app/page?id=1&extra=2", p)
+
+
+@pytest.mark.parametrize("module,flag", [("ffuf", "-H"), ("dalfox", "--user-agent"), ("sqlmap", "-A")])
+def test_default_literal_agent_is_explicit_even_when_native_tool_has_its_own_default(module, flag):
+    args = policy.command(["engine"], {**POLICY, "module": module, "agent": "ASFB-Research/0.1"})
+    assert flag in args
+    assert any("ASFB-Research/0.1" in value for value in args)
