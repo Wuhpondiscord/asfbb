@@ -794,7 +794,7 @@ async def run_scan_job(identifier, spec):
                     elif module in ACTIVE_MODULES:
                         profile_kwargs = ({"profile": spec.options.coverage_profile}
                                           if spec.options.coverage_profile != "current" else {})
-                        if spec.user_agent != "ASFB-Research/0.1":
+                        if spec.user_agent != "ASFB-Research/0.1" or (job.get("program") or {}).get("identity_applied"):
                             profile_kwargs["agent"] = spec.user_agent
                         if module == "arjun":
                             candidates = choose_arjun_targets(

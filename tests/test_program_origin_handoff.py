@@ -24,3 +24,14 @@ def test_program_origin_filters_archive_handoffs_before_http_probes():
         asyncio.run(run())
     assert job["status"] == "completed"
     assert job["endpoints"] == ["https://example.com/help"]
+
+
+def test_required_agent_is_forwarded_even_when_it_equals_the_default_literal():
+    run, job = run_job(["arjun"])
+    job["program"] = {"identity_applied": True}
+    async def review(module, url, host, **kwargs):
+        assert kwargs["agent"] == "ASFB-Research/0.1"
+        return {"status": "completed", "parameters": [], "metadata": {}, "output": "fixture"}
+    with patch.object(main, "public_host"), patch.object(main, "review", review):
+        asyncio.run(run())
+    assert job["status"] == "completed"
