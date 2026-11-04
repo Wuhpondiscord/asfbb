@@ -33,6 +33,8 @@ class PolicySettings(BaseModel):
     test_account_confirmed: bool = False
     rules_reviewed: bool = False
     custom_agent: str = Field(default="", max_length=300)
+    replacements: dict[str, str] = Field(default_factory=dict, max_length=20)
+    header_values: dict[str, str] = Field(default_factory=dict, max_length=5)
 
 
 class Selection(BaseModel):
@@ -85,8 +87,14 @@ def printable(value):
     return isinstance(value, str) and 0 < len(value) <= 300 and chr(92) not in value and all(32 <= ord(c) < 127 for c in value)
 
 
+def clean_template(value):
+    value = html.unescape(value)
+    # Markdown escapes are formatting, not part of identity headers.
+    return re.sub(chr(92) + chr(92) + r"([<>\[\]{}])", lambda match: match.group(1), value)
+
+
 def policy_analysis(rules, instructions="", partial=False):
-    text = (plain(rules) + "\n" + instructions).strip()
+    text = clean_template((plain(rules) + "\n" + instructions).strip())
     lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines() if line.strip()]
     agents, emails, headers, evidence, review = [], set(), [], [], []
     rates, blocked = [], False
@@ -121,10 +129,15 @@ def policy_analysis(rules, instructions="", partial=False):
                     emails.update(d.rstrip(".") for d in domains)
                     evidence.append({"kind": "test_account", "text": line[:600]})
                     recognized = True
+        agent_span = match.span(1) if match else None
         for match in re.finditer(r"\b(X-[A-Za-z0-9-]{1,70})\s*:\s*[`\"]?([^\n`\"]{1,250})", line, re.I):
+            if agent_span and agent_span[0] <= match.start() < agent_span[1]:
+                continue  # A header-looking token inside a User-Agent value is not another header.
             name, value = match.groups()
             if re.search(r"bug|bounty|research|hackerone", name, re.I) and printable(value.strip().rstrip(".")):
-                headers.append({"name": name, "value": value.strip().rstrip("."), "evidence": line[:600]})
+                value = value.strip().rstrip(".")
+                if not any(item["name"].lower() == name.lower() and item["value"] == value for item in headers):
+                    headers.append({"name": name, "value": value, "evidence": line[:600]})
                 recognized = True
         for match in re.finditer(r"(\d+(?:\.\d+)?)\s*(?:requests?|reqs?)\s*(?:per|/)\s*(second|sec|s|minute|min|m)\b|(\d+(?:\.\d+)?)\s*rps\b", lower):
             number = float(match.group(1) or match.group(3))
@@ -150,14 +163,34 @@ def policy_analysis(rules, instructions="", partial=False):
             "evidence": evidence[:30], "text": text[:250000], "partial": partial}
 
 
-def substitute(value, researcher):
-    pattern = r"<(?:your[-_ ]?)?(?:hackerone[-_ ]?)?(?:user(?:name)?|handle)>|\{(?:user(?:name)?|handle|researcher)\}|\[(?:user(?:name)?|handle)\]|YOUR_(?:HACKERONE_)?USERNAME"
-    if re.search(pattern, value, re.I):
-        if not researcher:
-            raise ValueError("Enter your researcher handle to fill the required identity")
-        value = re.sub(pattern, lambda _: researcher, value, flags=re.I)
-    if re.search(r"[<>{}]|YOUR_|\byour[-_ ](?:username|handle)\b", value, re.I):
-        raise ValueError("The identity template needs manual configuration")
+def replacement_key(value):
+    return re.sub(r"[^a-z0-9@.]", "", value.lower())
+
+
+def substitute(value, researcher, replacements=None, test_email=""):
+    value = clean_template(value)
+    lookup = {}
+    for key in ("user", "username", "yourusername", "hackeroneusername", "yourhackeroneusername",
+                "handle", "yourhandle", "researcher", "researcherhandle"):
+        if researcher:
+            lookup[key] = researcher
+    for key in ("email", "testemail", "hackeroneemail", "yourhackeroneemail"):
+        if test_email:
+            lookup[key] = test_email
+    for key, replacement in (replacements or {}).items():
+        if len(key) > 100 or not replacement_key(key) or not printable(replacement):
+            raise ValueError("Custom replacements need a token name and bounded printable value")
+        normalized = replacement_key(key)
+        lookup[normalized] = replacement
+    pattern = r"\{\{[^{}\r\n]{1,100}\}\}|<[^<>\r\n]{1,100}>|\{[^{}\r\n]{1,100}\}|\[[^\[\]\r\n]{1,100}\]|\bYOUR[-_ ](?:HACKERONE[-_ ])?USERNAME\b"
+    def replace(match):
+        key = replacement_key(match.group())
+        if key not in lookup:
+            raise ValueError("Set an identity replacement for " + match.group()[:100])
+        return lookup[key]
+    value = re.sub(pattern, replace, value, flags=re.I)
+    if re.search(r"[<>{}]|YOUR[_-]|\byour[-_ ](?:username|handle)\b", value, re.I):
+        raise ValueError("The identity template needs a replacement")
     if not printable(value):
         raise ValueError("User-Agent/header values must be printable text up to 300 characters")
     return value
@@ -168,11 +201,18 @@ def configure(analysis, settings):
         raise ValueError("Published rules prohibit automated scanning; this program cannot be queued")
     if analysis["review_required"] and not settings.rules_reviewed:
         raise ValueError("Confirm that you reviewed this program's current rules and configured the requirements")
+    if not settings.test_email and analysis["email_domains"]:
+        aliases = {"email", "testemail", "hackeroneemail", "yourhackeroneemail"}
+        aliases.update("@" + domain for domain in analysis["email_domains"])
+        for key, value in settings.replacements.items():
+            if replacement_key(key) in aliases and re.fullmatch(r"[^\s@]+@[^\s@]+", value) and value.rsplit("@", 1)[1].lower() in analysis["email_domains"]:
+                settings = settings.model_copy(update={"test_email": value})
+                break
     agent, requirements = DEFAULT_AGENT, analysis["user_agents"]
     exact = []
     for requirement in requirements:
         try:
-            value = substitute(requirement["value"], settings.researcher)
+            value = substitute(requirement["value"], settings.researcher, settings.replacements, settings.test_email)
         except ValueError:
             if not (settings.custom_agent and settings.rules_reviewed):
                 raise
@@ -186,20 +226,38 @@ def configure(analysis, settings):
     if exact:
         agent = exact[0]
     if settings.custom_agent:
-        if not printable(settings.custom_agent):
+        custom_agent = substitute(settings.custom_agent, settings.researcher, settings.replacements, settings.test_email)
+        if not printable(custom_agent):
             raise ValueError("Custom User-Agent contains unsupported characters")
-        if requirements and settings.custom_agent != agent and not settings.rules_reviewed:
+        if requirements and custom_agent != agent and not settings.rules_reviewed:
             raise ValueError("Review the rule before overriding the inferred User-Agent")
-        agent = settings.custom_agent
+        agent = custom_agent
     domains = analysis["email_domains"]
     if domains:
         email = settings.test_email.strip()
-        if (not re.fullmatch(r"[^\s@]+@[^\s@]+", email) or email.rsplit("@", 1)[1].lower() not in domains
-                or not settings.test_account_confirmed):
-            raise ValueError("Enter a matching test-account email and confirm that this account is configured")
+        if not re.fullmatch(r"[^\s@]+@[^\s@]+", email) or email.rsplit("@", 1)[1].lower() not in domains:
+            raise ValueError("Set a testing email matching " + " or ".join("@" + domain for domain in domains))
+        if not settings.test_account_confirmed:
+            raise ValueError("Confirm that this testing account is configured for the selected targets")
     headers = {}
+    expected_names = {item["name"].lower() for item in analysis["headers"]}
+    if any(name.lower() not in expected_names for name in settings.header_values):
+        raise ValueError("Header overrides must match this program's published identity headers")
+    overrides = {name.lower(): value for name, value in settings.header_values.items() if value}
     for item in analysis["headers"]:
-        headers[item["name"]] = substitute(item["value"], settings.researcher)
+        override = overrides.get(item["name"].lower())
+        try:
+            value = substitute(item["value"], settings.researcher, settings.replacements, settings.test_email)
+        except ValueError:
+            if not (override and settings.rules_reviewed):
+                raise
+            value = None
+        if override:
+            override = substitute(override, settings.researcher, settings.replacements, settings.test_email)
+            if override != value and not settings.rules_reviewed:
+                raise ValueError("Confirm rule review before overriding a required identity header")
+            value = override
+        headers[item["name"]] = value
     rate = analysis["max_rps"]
     if rate is not None and rate < 1 / 30:
         raise ValueError("This rate requirement is below the scanner's supported pacing; review manually")
@@ -287,9 +345,16 @@ def document(owner, review_id):
     return record
 
 
+class SetupMissing(ValueError):
+    """A program can be skipped while other selected programs continue."""
+
+
 def prepare(owner, selection):
     doc = document(owner, selection.review_id)
-    config = configure(doc["analysis"], selection.settings)
+    try:
+        config = configure(doc["analysis"], selection.settings)
+    except ValueError as exc:
+        raise SetupMissing(str(exc)) from exc
     rows = {row["id"]: row for row in doc["assets"]}
     chosen = []
     for identifier in selection.asset_ids:
@@ -428,12 +493,32 @@ def install(app, authorize, assets, maximum):
             "next_offset": result.get("next_offset"), "total": result.get("total"),
             "scope_note": "Wildcards need explicit URLs. Exclusions remain in effect. Import does not start a scan."}
 
+    @app.post("/api/discovery/resolve", dependencies=[Depends(authorize)])
+    def resolve_programs(payload: ImportSelection, request: Request):
+        results = []
+        for selection in payload.programs:
+            try:
+                doc = document(request.state.sid, selection.review_id)
+                config = configure(doc["analysis"], selection.settings)
+                results.append({"review_id": selection.review_id, "ready": True,
+                                "user_agent": config["user_agent"] if config["apply_agent"] else None,
+                                "headers": config["headers"], "email_domains": config["email_domains"]})
+            except ValueError as exc:
+                results.append({"review_id": selection.review_id, "ready": False, "reason": str(exc)})
+        return {"programs": results}
+
     @app.post("/api/discovery/import", dependencies=[Depends(authorize)])
     def import_programs(payload: ImportSelection, request: Request):
-        prepared = []
+        prepared, skipped, imported_programs = [], [], set()
         try:
             for selection in payload.programs:
-                doc, rows = prepare(request.state.sid, selection)
+                try:
+                    doc, rows = prepare(request.state.sid, selection)
+                except SetupMissing as exc:
+                    doc = document(request.state.sid, selection.review_id)
+                    skipped.append({"review_id": selection.review_id, "program_id": doc["program_id"], "reason": str(exc)})
+                    continue
+                imported_programs.add(doc["program_id"])
                 for value, row, config, restricted in rows:
                     asset = asset_from_row({"asset_identifier": value, "asset_type": "url",
                         "eligible_for_bounty": row.get("eligible_for_bounty"),
@@ -449,4 +534,5 @@ def install(app, authorize, assets, maximum):
             assets[asset["id"]] = asset
             _bindings[(request.state.sid, asset["id"])] = {"review_id": doc["review_id"], "config": config, "restricted": restricted}
         return {"imported": len(prepared), "web_asset_ids": [asset["id"] for asset, *_ in prepared],
-                "programs": len(payload.programs), "note": "Rules apply per target when scans are queued; review queue confirmations next."}
+                "programs": len(imported_programs), "requested_programs": len(payload.programs), "skipped": skipped,
+                "note": "Ready programs imported; programs with incomplete setup were skipped."}

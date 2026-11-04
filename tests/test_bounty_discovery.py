@@ -169,7 +169,9 @@ def test_explicit_exclusion_and_missing_review_are_atomic():
         response = import_program(client, doc, settings={"rules_reviewed": True})
         assert response.status_code == 422 and not main.assets
         doc = load_program(client, fixture_page("Review all testing requirements."))
-        assert import_program(client, doc, settings={}).status_code == 422
+        skipped = import_program(client, doc, settings={})
+        assert skipped.status_code == 200 and skipped.json()["imported"] == 0
+        assert len(skipped.json()["skipped"]) == 1
         assert not main.assets
 
 
@@ -278,3 +280,90 @@ def test_url_scope_origin_constraints_keep_exact_url_profile_even_at_root():
             "policy_confirmed": True, "active_confirmed": True, "modules": ["zap-passive", "httpx", "nuclei"]})
         assert queued.status_code == 200, queued.text
         assert main.jobs[queued.json()["id"]]["modules"] == ["zap-passive"]
+
+def test_escaped_23andme_style_header_is_deduplicated_and_resolves_username():
+    policy = ("Requests must include header X-HackerOne-Research: " + chr(92) + "<YOUR-USERNAME>\n") * 2
+    policy += "You must use your @wearehackerone.com email for testing accounts."
+    analysis = discovery.policy_analysis({"policy": policy})
+    assert len(analysis["headers"]) == 1 and not analysis["user_agents"]
+    configured = discovery.configure(analysis, discovery.PolicySettings(
+        researcher="wuhp", test_email="wuhp@wearehackerone.com",
+        test_account_confirmed=True, custom_agent="Researcher-wuhp"))
+    assert configured["headers"] == {"X-HackerOne-Research": "wuhp"}
+    assert configured["user_agent"] == "Researcher-wuhp"
+
+
+def test_header_example_inside_user_agent_is_not_a_duplicate_required_header():
+    analysis = discovery.policy_analysis({"policy": "User-Agent: X-HackerOne-Research: " + chr(92) + "<YOUR-USERNAME>"})
+    assert len(analysis["user_agents"]) == 1 and analysis["headers"] == []
+    configured = discovery.configure(analysis, discovery.PolicySettings(researcher="wuhp"))
+    assert configured["user_agent"] == "X-HackerOne-Research: wuhp"
+
+
+@pytest.mark.parametrize("template", ["<YOUR-USERNAME>", "{username}", "[username]", "YOUR-USERNAME", "{{USERNAME}}"])
+def test_common_username_aliases_replace_the_entire_placeholder(template):
+    assert discovery.substitute("Research-" + template, "wuhp") == "Research-wuhp"
+
+
+def test_custom_replacements_and_domain_email_work_without_duplicating_inputs():
+    analysis = discovery.policy_analysis({"policy": "Use header X-Bug-Bounty: <TEAM>-<YOUR-USERNAME>\nUse your @wearehackerone.com email for testing accounts."})
+    configured = discovery.configure(analysis, discovery.PolicySettings(
+        researcher="wuhp", replacements={"TEAM": "Research", "@wearehackerone.com": "wuhp@wearehackerone.com"},
+        test_account_confirmed=True))
+    assert configured["headers"]["X-Bug-Bounty"] == "Research-wuhp"
+
+
+def test_missing_identity_program_is_skipped_while_ready_program_imports():
+    main.assets.clear()
+    async def fetch(path, params=None):
+        if "/missing/" in path:
+            return fixture_page(RULES)
+        return fixture_page("User-Agent: Ready-Researcher")
+    with TestClient(main.app) as client, patch.object(discovery, "fetch_json", fetch):
+        ready = client.get("/api/discovery/programs/hackerone/ready").json()
+        missing = client.get("/api/discovery/programs/hackerone/missing").json()
+        response = client.post("/api/discovery/import", json={"programs": [
+            {"review_id": doc["review_id"], "asset_ids": [doc["assets"][0]["id"]], "settings": {}}
+            for doc in (ready, missing)]})
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["imported"] == 1 and data["programs"] == 1
+        assert data["skipped"][0]["program_id"] == "hackerone:missing"
+        assert len(main.assets) == 1
+
+
+def test_setup_preview_uses_same_checks_and_values_as_import():
+    main.assets.clear()
+    with TestClient(main.app) as client:
+        doc = load_program(client, fixture_page(RULES))
+        settings = {"researcher": "wuhp", "test_email": "wuhp@wearehackerone.com"}
+        body = {"programs": [{"review_id": doc["review_id"], "settings": settings}]}
+        preview = client.post("/api/discovery/resolve", json=body).json()["programs"][0]
+        assert not preview["ready"] and "Confirm" in preview["reason"]
+        settings["test_account_confirmed"] = True
+        preview = client.post("/api/discovery/resolve", json=body).json()["programs"][0]
+        assert preview["ready"] and preview["user_agent"] == "HackerOne-wuhp"
+        imported = import_program(client, doc, settings=settings)
+        assert imported.json()["imported"] == 1
+
+
+def test_reviewed_header_override_is_available_when_a_custom_token_is_missing():
+    analysis = discovery.policy_analysis({"policy": "Use header X-Bug-Bounty: <TEAM-NAME>"})
+    settings = discovery.PolicySettings(rules_reviewed=True, header_values={"X-Bug-Bounty": "Reviewed-Team"})
+    assert discovery.configure(analysis, settings)["headers"] == {"X-Bug-Bounty": "Reviewed-Team"}
+
+
+def test_missing_review_is_skipped_but_invalid_ready_scope_stays_atomic():
+    main.assets.clear()
+    with TestClient(main.app) as client:
+        doc = load_program(client, fixture_page("User-Agent: Fixed"))
+        response = client.post("/api/discovery/import", json={"programs": [
+            {"review_id": doc["review_id"], "asset_ids": [doc["assets"][0]["id"]]},
+            {"review_id": doc["review_id"], "asset_ids": ["forged-scope-id"]}]})
+        assert response.status_code == 422 and not main.assets
+
+
+@pytest.mark.parametrize("value", ["bad\r\nInjected: value", "bad" + chr(92) + "nInjected: value"])
+def test_custom_replacements_cannot_inject_headers(value):
+    with pytest.raises(ValueError):
+        discovery.substitute("<TEAM>", "wuhp", {"TEAM": value})
