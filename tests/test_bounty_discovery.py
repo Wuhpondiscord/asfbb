@@ -486,6 +486,8 @@ def test_prose_scope_offers_only_explicit_bullet_domains_for_review():
         assert {row["identifier"] for row in candidates} == {"example.org", "*.example.org", "example.net", "*.example.net"}
         assert doc["total"] == len(doc["assets"]) == 5
         assert doc["analysis"]["review_required"]
+        assert doc["analysis"]["text"].count("These include:") == 1
+        assert all(len(row["instructions"]) < 500 for row in candidates)
         chosen = next(row for row in candidates if row["identifier"] == "example.org")
         response = import_program(client, doc, settings={"rules_reviewed": True}, selected=[chosen["id"]])
         assert response.status_code == 200 and response.json()["imported"] == 1

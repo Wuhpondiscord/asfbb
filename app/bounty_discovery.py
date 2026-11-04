@@ -411,7 +411,7 @@ def scope_candidates(rows):
                 if (identifier, kind) in seen:
                     continue
                 candidate = {"identifier": identifier, "type": kind,
-                             "instructions": "Explicit domain listed in this prose scope; verify ownership and exclusions. " + text,
+                             "instructions": "Domain explicitly listed in the scope description for: " + row["identifier"][:300] + ". Verify ownership and exclusions.",
                              "eligible_for_bounty": row.get("eligible_for_bounty"),
                              "scope_source": row["identifier"], "requires_scope_review": True}
                 candidate["id"] = asset_id(candidate)
@@ -547,7 +547,7 @@ def install(app, authorize, assets, maximum):
                                   {"limit": 1000, "offset": offset})
         rows = scope_candidates([dict(row, id=asset_id(row)) for row in result.get("in_scope", []) if isinstance(row, dict) and isinstance(row.get("identifier"), str)])
         exclusions = [row for row in result.get("out_of_scope", []) if isinstance(row, dict) and isinstance(row.get("identifier"), str)]
-        instructions = "\n".join(plain(row.get("instructions")) + "\n" + plain(row.get("raw")) for row in rows)
+        instructions = "\n".join(dict.fromkeys(plain(row.get("instructions")) + "\n" + plain(row.get("raw")) for row in rows if not row.get("requires_scope_review")))
         analysis = policy_analysis(result.get("rules"), instructions, bool(result.get("partial")))
         if any(row.get("requires_scope_review") for row in rows):
             analysis["review_required"] = True
