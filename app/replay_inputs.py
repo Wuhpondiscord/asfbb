@@ -1,4 +1,4 @@
-"""Validated one-asset replay inputs; raw requests are never public options."""
+"""Validated per-target replay inputs; raw requests are never public options."""
 import json
 import math
 import re
@@ -145,7 +145,23 @@ class StateCounter(PrivateModel):
         return self
 
 
-class RaceReplay(PrivateModel):
+class ReplayProfile(PrivateModel):
+    target_origin: str = Field(default="", max_length=300)
+
+    @field_validator("target_origin")
+    @classmethod
+    def valid_origin(cls, value):
+        if not value:
+            return value
+        parts = urlsplit(value)
+        if (parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password
+                or parts.path not in ("", "/") or parts.query or parts.fragment
+                or parts.port not in (None, 80, 443, 8080) or any(c in value for c in "\r\n\x00\\")):
+            raise ValueError("target_origin must be an HTTP(S) origin without a path, query or credentials")
+        return value.rstrip("/")
+
+
+class RaceReplay(ReplayProfile):
     request: ReplayRequest
     field: str = Field(min_length=1, max_length=50)
     control_value: str = Field(min_length=1, max_length=128)
@@ -162,7 +178,7 @@ class RaceReplay(PrivateModel):
         return self
 
 
-class NoSQLReplay(PrivateModel):
+class NoSQLReplay(ReplayProfile):
     request: ReplayRequest
     field: str = Field(min_length=1, max_length=50)
     success: JsonMatch

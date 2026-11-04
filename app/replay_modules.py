@@ -7,10 +7,12 @@ from urllib.parse import urljoin, urlsplit
 
 from .module_inputs import ModuleInputs
 from .pipeline import execute
+from .sampling import origin
 from .web_modules import alert, read_report
 
 REASONS = {
     "scope_blocked": "Request outside the selected origin/profile was blocked",
+    "origin_mismatch": "Replay profile is bound to another origin; other selected modules may continue",
     "request_budget": "Replay request budget reached",
     "rate_limited": "HTTP 429; replay stopped without retries",
     "redirect_not_followed": "Redirect was not followed",
@@ -37,7 +39,10 @@ async def run(module, url, host, agent, delay, inputs=None):
     values = inputs if isinstance(inputs, ModuleInputs) else ModuleInputs(**(inputs or {}))
     cfg = values.race if module == "race-replay" else values.nosql
     if cfg is None:
-        reason = "Requires an explicit one-asset replay profile under Settings → Replay checks"
+        reason = "Requires a replay profile under Settings → Replay checks"
+        return {"source": module, "target": url, "status": "skipped", "alerts": [], "reason": reason, "output": reason}
+    if cfg.target_origin and origin(cfg.target_origin) != origin(url):
+        reason = REASONS["origin_mismatch"]
         return {"source": module, "target": url, "status": "skipped", "alerts": [], "reason": reason, "output": reason}
     count = 8 if module == "race-replay" and cfg.verification else 4 if module == "race-replay" else 6
     deadline = max(75, min(330, math.ceil(count * (delay + 8) + 10)))
@@ -98,7 +103,7 @@ async def run(module, url, host, agent, delay, inputs=None):
                 metadata[field] = {name: source[name] for name in names if name in source and
                     (source[name] is None or type(source[name]) is bool if field == "matches"
                      else type(source[name]) is int and 100 <= source[name] <= 599)}
-    if status == "completed" and report.get("status") in ("partial", "failed"):
+    if status == "completed" and report.get("status") in ("partial", "failed", "skipped"):
         status = report["status"]
     if status == "completed" and report.get("status") != "completed":
         status = "partial"

@@ -10,6 +10,7 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
  let html=fs.readFileSync('app/index.html','utf8');const now=Date.now()/1000;
  let builtinInfo={templates:[{id:'technology-headers'}],default_ids:['technology-headers']};
  const discoveryQueries=[];
+ let batchAccountEnabled=false,batchSubmitted=false;
  const jobs=[
   {id:'job-one',target:'https://alpha.example.org/',status:'running',created:now-20,stage:'idor-forge',progress:50,request_count:0,modules:['idor-forge'],pipeline:{'idor-forge':'running',amass:'completed'},alerts:[],endpoints:[],stage_details:{amass:{status:'completed',elapsed_ms:120000,early_stop:true,coverage_complete:false,stop_reason:'native_time_budget',reason:'Early stop: native time budget; coverage is incomplete'}}},
   {id:'job-two',target:'https://beta.example.org/',status:'partial',created:now-60,stage:'partial',progress:100,request_count:1,modules:['gau'],pipeline:{gau:'timeout'},alerts:[],endpoints:[],stage_details:{gau:{status:'timeout',elapsed_ms:12000,reason:'Common Crawl deadline',summary:'Partial archive coverage'}}},
@@ -70,6 +71,18 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
    const data=addImported('bounty-target','https://bounty.example.org/','discovery');
    return route.fulfill({contentType:'application/json',body:JSON.stringify({...data,programs:1,skipped:[{review_id:'review-two',program_id:'bugcrowd:review',reason:'Confirm rule review'}]})});
   }
+  if(u.pathname==='/api/scans/batch'){
+   const body=route.request().postDataJSON();
+   assert.deepEqual(body.asset_ids,['direct-url','file-url']);
+   assert.equal(body.account_id,'batch-account');
+   assert(body.options.inputs.nosql);
+   assert.equal(body.options.inputs.source_text,'batch-private-source');
+   assert.equal(body.options.inputs.idor_path,'/api/items');
+   assert.equal(body.inputs_by_asset['file-url'].nosql,null);
+   assert.equal(body.inputs_by_asset['file-url'].source_text,'different-private-source');
+   batchSubmitted=true;
+   return route.fulfill({contentType:'application/json',body:JSON.stringify({queued:2,reused:0,scans:[{id:'batch-one'},{id:'batch-two'}]})});
+  }
   if(u.pathname==='/api/assets')data={assets:importedAssets};
   else if(u.pathname==='/api/import/text'){
    const body=route.request().postDataJSON();
@@ -81,7 +94,7 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
    assert(route.request().postDataBuffer().toString().includes('https://file.example.org/'));
    data=addImported('file-url','https://file.example.org/','text');
   }
-  else if(u.pathname==='/api/accounts')data=[];
+  else if(u.pathname==='/api/accounts')data=batchAccountEnabled?[{id:'batch-account',name:'Batch fixture',host:'single.example.org'}]:[];
   else if(u.pathname==='/api/scans')data=jobs;
   else if(u.pathname==='/api/logs')data={events,total:3,returned:3,truncated:false};
   else if(u.pathname==='/api/pipeline/plan'){
@@ -280,7 +293,7 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
  assert.equal(await page.locator('#reports').inputValue(),'');
  assert(!(await page.locator('#nucleiBuiltins input').first().isChecked()));
  assert(await page.evaluate(()=>nucleiCommunityPaths.has('http/exposures/configs/example.yaml')));
- for(const id of ['raceProfile','nosqlProfile','moduleGraphqlPath','moduleCorsPath','moduleWebsocketPath','moduleSource','moduleSbom','moduleIdorValues','acookie','jwt','nucleiCustom'])
+ for(const id of ['raceProfile','nosqlProfile','moduleTargetInputs','moduleGraphqlPath','moduleCorsPath','moduleWebsocketPath','moduleSource','moduleSbom','moduleIdorValues','acookie','jwt','nucleiCustom'])
   assert.equal(await page.locator('#'+id).inputValue(),'');
  for(const id of ['policy','activeConsent','moduleTrufflehogVerify'])
   assert(!(await page.locator('#'+id).isChecked()));
@@ -399,6 +412,27 @@ const { chromium } = require(process.env.ASFB_PLAYWRIGHT_MODULE);
  const savedIdentity=await page.evaluate(()=>{const pair=document.cookie.split(';').map(s=>s.trim()).find(s=>s.startsWith('asfb_pref_identity_defaults='));return pair?JSON.parse(decodeURIComponent(pair.slice(pair.indexOf('=')+1))):{values:{}}});
  assert.equal(savedIdentity.values.values,undefined);
  assert.equal(await page.locator('nav.tabs button').last().getAttribute('id'),'tab-settings');
+ // Queue a real dashboard batch with replay, IDOR, source and per-target inputs.
+ batchAccountEnabled=true;
+ await page.evaluate(async ()=>{
+  await loadAccounts();
+  selectedIds=new Set(['direct-url','file-url']);
+  document.querySelectorAll('.module-card input').forEach(n=>n.checked=false);
+  el('modNosql').checked=true;el('modIdorForge').checked=true;el('modSemgrep').checked=true;
+  el('nosqlProfile').value=JSON.stringify(REPLAY_EXAMPLES.nosql);
+  el('moduleIdorPath').value='/api/items';el('moduleIdorBaseline').value='first';el('moduleIdorValues').value='second';
+  el('moduleSource').value='batch-private-source';el('moduleSastLanguage').value='python';
+  el('moduleTargetInputs').value=JSON.stringify({'https://file.example.org/':{nosql:null,source_text:'different-private-source'}});
+  el('account').value='batch-account';el('policy').checked=true;el('activeConsent').checked=true;
+  switchTab('scope');showScopeSource('import');render();
+ });
+ await page.locator('#start').click();
+ await page.waitForFunction(()=>!selectedIds.has('direct-url')&&!selectedIds.has('file-url'));
+ assert(batchSubmitted);
+ for(const id of ['moduleTargetInputs','nosqlProfile','moduleSource','moduleIdorBaseline','moduleIdorValues'])
+  assert.equal(await page.locator('#'+id).inputValue(),'');
+ await page.evaluate(()=>preferenceStore.flush());
+ assert(!JSON.stringify(await page.context().cookies()).includes('batch-private-source'));
  assert.deepEqual(errors,[]);
  await browser.close();
  console.log('Dashboard browser checks passed: settings order, module inputs, job filters, status dots, stable details, job logs, search, pause and responsive layouts');

@@ -220,6 +220,9 @@ async def run(spec, factory=None, check=default_check, pause=asyncio.sleep, chec
     save()
     try:
         cfg = RaceReplay.model_validate(spec["config"]) if module == "race-replay" else NoSQLReplay.model_validate(spec["config"])
+        if cfg.target_origin and origin(cfg.target_origin) != origin(spec["target"]):
+            report.update(status="skipped", stop_reason="origin_mismatch")
+            return report
         io = ReplayIO(spec, report, save, factory, check, pause)
         async with asyncio.timeout(max(1, spec["deadline"] - 5)):
             await (race(io, cfg, report) if module == "race-replay" else nosql(io, cfg, report))

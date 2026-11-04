@@ -10,7 +10,7 @@ import httpx
 from fastapi import FastAPI, File, Header, HTTPException, UploadFile, Depends, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, Field, PrivateAttr, ValidationError
 
 from .scope import LEVELS, parse_csv, public_host, target_url, DNSResolutionFailed
 from . import storage
@@ -23,7 +23,7 @@ from .module_inputs import ModuleInputs
 from .target_import import parse_targets, target_key, MAX_TARGETS
 from .planning import plan as build_pipeline_plan, page_target, assessed_urls
 from .coverage import profile as coverage_settings
-from .web_modules import MODULES as WEB_MODULES, run_web_module
+from .web_modules import MODULES as WEB_MODULES, run_web_module, same_origin
 
 from . import nuclei_catalog
 from . import bounty_discovery
@@ -118,6 +118,7 @@ class PipelineOptions(BaseModel):
 class ScanRequest(BaseModel):
     _program_headers: dict = PrivateAttr(default_factory=dict)
     _program_origin: bool = PrivateAttr(default=False)
+    _zap_skip_reason: str = PrivateAttr(default="")
     asset_id: str
     policy_confirmed: bool = False
     user_agent: str = Field(default="ASFB-Research/0.1", max_length=300)
@@ -406,9 +407,7 @@ async def create_scan(spec: ScanRequest, request: Request):
 
     if ACTIVE_MODULES.intersection(spec.modules):
         if not spec.active_confirmed:
-            raise HTTPException(422, "Explicit permission for active single-target tests is required")
-        if spec.account_id:
-            raise HTTPException(422, "Active review stages do not use account profiles")
+            raise HTTPException(422, "Explicit permission for active tests is required")
     if queue.qsize() >= 1000:
         raise HTTPException(429, "Scan queue full")
     if not spec.policy_confirmed:
@@ -434,6 +433,8 @@ async def create_scan(spec: ScanRequest, request: Request):
         if (existing.get("owner") == request.state.sid
                 and existing.get("asset_id") == spec.asset_id
                 and existing.get("user_agent", "ASFB-Research/0.1") == spec.user_agent
+                and existing.get("account_id") == spec.account_id
+                and existing.get("zap_skip_reason", "") == spec._zap_skip_reason
                 and existing.get("program") == program_policy
                 and existing.get("status") in ("queued", "running")
                 and existing.get("modules") == spec.modules
@@ -452,7 +453,8 @@ async def create_scan(spec: ScanRequest, request: Request):
     recorded_options["nuclei"]["custom_templates"] = [
         "[inline template]" for _ in spec.options.nuclei.custom_templates]
     jobs[identifier] = {"owner": request.state.sid, "id": identifier, "asset_id": spec.asset_id, "target": url,
-                        "status": "queued", "plan": execution_plan, "user_agent": spec.user_agent, "program": program_policy, "alerts": [], "error": None, "created": time.time(),
+                        "status": "queued", "plan": execution_plan, "user_agent": spec.user_agent,
+                        "account_id": spec.account_id, "zap_skip_reason": spec._zap_skip_reason, "program": program_policy, "alerts": [], "error": None, "created": time.time(),
                         "request_count": 0, "cancelled": False, "modules": spec.modules, "endpoints": [], "pipeline": {}, "reviews": [], "probes": [], "options": recorded_options, "progress": 0, "stage": "queued"}
     log_event(jobs[identifier], "queued", modules=spec.modules, parallel_jobs=spec.options.parallel_jobs,
               order_mode=spec.options.order_mode, coverage_profile=spec.options.coverage_profile,
@@ -465,43 +467,57 @@ class BatchRequest(BaseModel):
     asset_ids: list[str] = Field(min_length=1, max_length=1000)
     policy_confirmed: bool = False
     user_agent: str = Field(default="ASFB-Research/0.1", max_length=300)
+    max_requests: int = Field(default=1, ge=1, le=10)
     delay_seconds: float = Field(default=config.REQUEST_DELAY_DEFAULT, ge=config.REQUEST_DELAY_MIN, le=config.REQUEST_DELAY_MAX)
     modules: list[str] = Field(default_factory=lambda: ["zap-passive"])
     options: PipelineOptions = Field(default_factory=PipelineOptions)
+    inputs_by_asset: dict[str, ModuleInputs] = Field(default_factory=dict, max_length=1000)
+    account_id: str | None = None
     active_confirmed: bool = False
+
 
 @app.post("/api/scans/batch", dependencies=[Depends(authorize)])
 async def batch_scans(payload: BatchRequest, request: Request):
-    if len(payload.asset_ids) > 1 and (
-            "race-replay" in payload.modules and payload.options.inputs.race is not None
-            or "nosql" in payload.modules and payload.options.inputs.nosql is not None):
-        raise HTTPException(422, "Replay profiles apply to one selected asset per job")
-    if len(payload.asset_ids) > 1 and "idor-forge" in payload.modules and payload.options.inputs.idor_path:
-        raise HTTPException(422, "Configure IDOR-Forge comparisons for one selected asset at a time")
-    if len(payload.asset_ids) > 1 and (payload.options.inputs.source_text or payload.options.inputs.sbom_text):
-        raise HTTPException(422, "Attach source/SBOM input to one selected asset per job")
     if ACTIVE_MODULES.intersection(payload.modules) and not payload.active_confirmed:
         raise HTTPException(422, "Active review requires authorization")
     if not payload.policy_confirmed:
         raise HTTPException(422, "Program policy confirmation is required")
     if len(set(payload.asset_ids)) != len(payload.asset_ids) or queue.qsize() + len(payload.asset_ids) > 1000:
         raise HTTPException(422, "Duplicate assets or queue capacity exceeded")
+    if set(payload.inputs_by_asset) - set(payload.asset_ids):
+        raise HTTPException(422, "Per-target inputs must refer to selected asset IDs")
+    profile = accounts.get(payload.account_id) if payload.account_id else None
+    if payload.account_id and (not profile or profile.get("owner") != request.state.sid):
+        raise HTTPException(422, "Account profile not found in this session")
+    candidates = []
     for asset_id in payload.asset_ids:
         item = assets.get(asset_id)
         if item is None or item.get("owner") != request.state.sid:
             raise HTTPException(409, "Selected scope is stale or belongs to another session. Refresh assets, re-import the CSV if necessary, and select targets again.")
         try:
-            candidate = ScanRequest(asset_id=asset_id, modules=payload.modules, options=payload.options,
-                                    user_agent=payload.user_agent, delay_seconds=payload.delay_seconds)
-            candidate, _ = bounty_discovery.enforce_asset(request.state.sid, item, candidate)
+            options = payload.options.model_copy(deep=True)
+            if asset_id in payload.inputs_by_asset:
+                options.inputs = ModuleInputs.model_validate({
+                    **options.inputs.model_dump(),
+                    **payload.inputs_by_asset[asset_id].model_dump(exclude_unset=True)})
             _, host = target_url(item)
-            validate_scan_host(host, candidate.modules)
+            account_id = payload.account_id if profile and profile["host"] == host else None
+            candidate = ScanRequest(asset_id=asset_id, modules=payload.modules, options=options,
+                                    user_agent=payload.user_agent, delay_seconds=payload.delay_seconds,
+                                    max_requests=payload.max_requests, account_id=account_id,
+                                    policy_confirmed=True, active_confirmed=payload.active_confirmed)
+            if profile and not account_id:
+                candidate._zap_skip_reason = "Selected ZAP account belongs to another hostname; ZAP skipped, other selected modules remain eligible"
+            # Preflight every target before mutating the queue. Preserve the raw
+            # module order; create_scan applies this policy again when recording it.
+            checked, _ = bounty_discovery.enforce_asset(request.state.sid, item, candidate)
+            validate_scan_host(host, checked.modules)
+            candidates.append(candidate)
+        except ValidationError:
+            raise HTTPException(422, "Per-target module inputs are invalid; private values redacted") from None
         except ValueError as exc:
-            raise HTTPException(422, str(exc))
-    result = []
-    for asset_id in payload.asset_ids:
-        result.append(await create_scan(ScanRequest(asset_id=asset_id, policy_confirmed=True, user_agent=payload.user_agent,
-                                                    delay_seconds=payload.delay_seconds, modules=payload.modules, options=payload.options, active_confirmed=payload.active_confirmed), request))
+            raise HTTPException(422, str(exc)) from None
+    result = [await create_scan(candidate, request) for candidate in candidates]
     return {"queued": sum(not item.get("reused", False) for item in result),
             "reused": sum(bool(item.get("reused")) for item in result), "scans": result}
 
@@ -621,8 +637,11 @@ async def run_scan_job(identifier, spec):
                 break
             async with module_slot(module, job, log_event,
                                    enabled=(module not in ('depscan', 'trivy') or bool(spec.options.inputs.sbom_text))
-                                   and (module != "race-replay" or spec.options.inputs.race is not None)
-                                   and (module != "nosql" or spec.options.inputs.nosql is not None)):
+                                   and (module != "race-replay" or spec.options.inputs.race is not None and (
+                                       not spec.options.inputs.race.target_origin or same_origin(spec.options.inputs.race.target_origin, url)))
+                                   and (module != "nosql" or spec.options.inputs.nosql is not None and (
+                                       not spec.options.inputs.nosql.target_origin or same_origin(spec.options.inputs.nosql.target_origin, url)))
+                                   and (module != "zap-passive" or not spec._zap_skip_reason)):
                 unresolved = False
                 try:
                     public_host(host, os.environ.get("ALLOW_PRIVATE_TARGETS") == "1")
@@ -661,6 +680,8 @@ async def run_scan_job(identifier, spec):
                     elif module == "httpx":
                         result = await probe(endpoints, host, spec.user_agent, spec.options.httpx_limit)
                         job["probes"] = result["probes"]
+                    elif module == "zap-passive" and spec._zap_skip_reason:
+                        result = {"status": "skipped", "reason": spec._zap_skip_reason, "alerts": []}
                     elif module == "zap-passive":
                         async with httpx.AsyncClient(timeout=20, trust_env=False) as control:
                             await zap_call(control, "core", "action/newSession", {})
@@ -851,7 +872,6 @@ async def run_scan_job(identifier, spec):
                     result = {"status":"failed", "reason":"Module exception: "+exc.__class__.__name__}
                 if spec._program_origin:
                     # Filter each handoff before any later module can consume it.
-                    from .web_modules import same_origin
                     endpoints = [candidate for candidate in endpoints if same_origin(candidate, url)]
                     job["endpoints"] = endpoints[1:]
                     for field in ("probes", "parameters", "alerts"):

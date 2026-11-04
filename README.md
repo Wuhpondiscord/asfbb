@@ -7,7 +7,7 @@ app_port: 7860
 
 ## Race replay and NoSQL HTTP review
 
-Configure **Settings → Replay checks**, enable the desired module and select one asset. Blank profiles skip in Full pipeline. Both modules are keyless; optional test-account headers stay private to the job. Profiles are never saved in cookies/public job options and clear after queuing.
+Configure **Settings → Replay checks**, enable the desired module and select authorized targets. Shared profiles can be used in batches; per-target overrides supply separate fixtures or requests. Blank profiles skip in Full pipeline. Both modules are keyless; optional test-account headers stay private to the job. Profiles are never saved in cookies/public job options and clear after queuing.
 
 Race replay sends two sequential requests on a control fixture, then two best-effort overlapping requests on a distinct fresh fixture. Use disposable state: POST operations can have effects. Exactly one sequential success is required before the burst. An optional GET counter verifier requires fresh zero counters and exactly one control effect. A parallel counter overrun is a corroborated candidate; without verification, duplicate success responses are informational and may be idempotent acknowledgements. This is not HTTP/2 single-packet synchronization.
 
@@ -230,7 +230,7 @@ Logs support full-detail search, level/module/event/job/time filters, elapsed-ti
 
 The HF image pins [IDOR-Forge's MIT-licensed core](https://github.com/errorfiathck/IDOR-Forge/tree/bc37cfc9143b40d7f91d1fa25753a22e908f4e84) and retains its license in /opt/idor-forge/LICENSE. The upstream response comparison and heuristic methods run in a separate environment. This is a limited anonymous GET comparison profile, not the full upstream CLI or GUI.
 
-Select one asset, enable IDOR-Forge and provide a same-origin endpoint path, one query parameter, a baseline reference ID and up to three distinct reference IDs under Settings → Module inputs. Without applicable inputs it skips, including when all modules are enabled. It needs no API key. The profile permits at most four requests, no redirects, no retries, bounded response bodies, an overall deadline and public-host revalidation before each request. It stops on rate limits. No upstream random payload generation, login, POST/PUT/DELETE, evasion or reports run. Account profiles are not used by active modules.
+Select authorized targets, enable IDOR-Forge and provide a same-origin endpoint path, one query parameter, a baseline reference ID and up to three distinct reference IDs under Settings → Module inputs. Without applicable inputs it skips, including when all modules are enabled. It needs no API key. The profile permits at most four requests, no redirects, no retries, bounded response bodies, an overall deadline and public-host revalidation before each request. It stops on rate limits. No upstream random payload generation, login, POST/PUT/DELETE, evasion or reports run. Account profiles are not used by active modules.
 
 Identical responses are not flagged. Similarity matches are informational, low-confidence review candidates: anonymous response differences cannot prove object ownership or broken authorization. Verify with two authorized test accounts before reporting. Reference values and response bodies are not returned in jobs or logs. The current profile does not implement authenticated differential two-account IDOR replay.
 
@@ -315,7 +315,7 @@ python -m pytest -q
 OpenAPI discovery, per-program policy manifests, scoped crawling, differential two-account IDOR replay, verified JWT rule pack, vulnerability triage, persistence and scan-history diffing.
 
 ## v0.2 — additional features
-- **Batch queue**: `POST /api/scans/batch` (up to 40 individually scoped web assets per request). Jobs remain sequential and require manual confirmation of program policy.
+- **Batch queue**: `POST /api/scans/batch` accepts up to the shared 1,000-job queue capacity. Each target gets its own job and retains its program constraints; policy and active-test authorization remain required.
 - **Persistence**: non-secret imported assets and job status/alerts are stored in SQLite (`ASFB_DB_PATH`, default `/app/data/asfb.sqlite3`). Attach persistent storage if desired. Account cookies are never saved.
 - **Offline JWT review**: `POST /api/tools/jwt/inspect` accepts a token and returns only header/claim field names plus heuristic warnings; it does not verify signature validity or access tokens to any server.
 - **Automatic Hugging Face deployment**: GitHub Action deploys `main` when `HF_TOKEN` is a GitHub **Actions secret** and `HF_SPACE_REPO` is a GitHub **Actions variable** (e.g. `owner/space`). The `GH_Token` secret in Hugging Face is not required and should not be used for raw credential logs.
@@ -334,7 +334,7 @@ The Space Docker image includes pinned ProjectDiscovery Nuclei v3.11.1 and Katan
 - **Katana:** standard non-headless crawler, depth 1, exact-host scoping, one request/second, one worker, up to 30 seconds, up to 100 same-host discovered URLs returned per job. No form auto-filling or headless browser.
 - **Nuclei:** technology-detection templates only (`-tags tech`), one request/second, one worker, up to 90 seconds, 100 findings per job. Nuclei template updates may require network access on first run. This is not a general vulnerability/active-scan pipeline.
 - **Results:** findings from Nuclei are labeled `source: nuclei`; Katana endpoints and per-stage status are included in each job's JSON.
-- **Batch scans:** preserve the module selection for each of the up to 40 jobs per batch. These scans run sequentially and are unauthenticated; configured account cookies are passed only to the original single-target ZAP stage, not the new tools.
+- **Batch scans:** preserve compatible selected modules per target. Shared module inputs can be overridden per asset through `inputs_by_asset`. Saved account cookies apply only to matching-host ZAP stages, while other modules keep their own supported identity profiles.
 
 **Important**: Confirm the target program explicitly permits automated crawling and template-based requests. The project remains an experimental public Space and does not independently prove user authorization or reliably prevent DNS-rebinding/egress abuse. Do not enable unrestricted scanning against targets that have not authorized these activities. Scan detections are preliminary and require manual verification.
 
@@ -385,3 +385,12 @@ Website-root URL scopes now retain an origin-enforced pipeline rather than becom
 Explicit domain bullets in a broad prose scope are offered as derived candidates for manual selection and required rule review. A scope explicitly mentioning domains and subdomains also offers corresponding wildcard entries, which still require concrete URLs. Generic infrastructure descriptions, cloud-provider examples and policy links never become targets. Exclusions remain enforced. Unrelated prose exclusions require review but no longer force every domain into ZAP-only mode.
 
 The separate 100-target active-batch cap has been removed in the API and UI. Active authorization is still required; the shared queue holds up to 1,000 jobs and target concurrency remains bounded to three. The jobs endpoint now returns all jobs owned by the session instead of silently returning only its latest 100.
+### Batch module inputs without single-selection gates
+
+Replay, IDOR-Forge, source text and SBOM inputs no longer reject a multi-target batch in either the dashboard or API. Shared inputs apply to each selected target. Every target still has an independent job, program policy and module applicability checks.
+
+Settings → Module inputs → Per-target module overrides accepts a JSON object keyed by an exact selected URL or asset ID. Each value overrides shared fields for that target; omitted fields inherit shared values, `null` disables a replay profile, and an empty string clears a text/path input. The API uses `inputs_by_asset`, keyed by selected asset IDs. This supports different race fixtures, replay credentials, IDOR IDs, source artifacts and SBOMs. Overrides are private, are not saved in browser preferences or public job options, and clear after successful queuing.
+
+Race and NoSQL profiles optionally accept `target_origin`, for example `https://api.example.org`. Bound profiles skip nonmatching scheme/host/port targets before DNS, HTTP or subprocess execution. Unbound shared profiles run for each selected target, so use separate overrides where targets share fixture state. Request headers in a shared replay profile apply wherever that profile runs; bind a profile or use target-specific overrides for credentials that belong to one service.
+
+A selected saved ZAP account no longer blocks active modules or batch queuing. Its cookies/headers are supplied only to the ZAP stage on its configured hostname. Other hosts skip ZAP with an explicit reason and continue other compatible modules; active tools do not inherit saved account credentials. Batch requests also honor the selected ZAP repeat-request count. Authorization, session ownership, published scope boundaries, routing protections and execution budgets remain enforced.

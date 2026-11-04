@@ -130,3 +130,26 @@ def test_complete_guided_plan_remains_acyclic_and_manual_order_is_exact():
     order=list(planning.MODULES)
     assert not planning.plan(order,"guided",True)["warnings"]
     assert planning.plan(order,"manual")["effective"]==order
+
+@pytest.mark.parametrize("module,profile", [("race-replay", RACE), ("nosql", NOSQL)])
+def test_origin_bound_profile_skips_unmatched_target_without_process(module, profile):
+    cfg = {**profile, "target_origin": "https://only.example.org"}
+    with patch.object(modules, "execute") as launch:
+        result = asyncio.run(modules.run(module, "https://example.org/", "example.org", "Test", 1,
+            ModuleInputs(**({"race": cfg} if module == "race-replay" else {"nosql": cfg}))))
+    assert result["status"] == "skipped" and "another origin" in result["reason"]
+    assert not launch.called
+
+
+def test_native_runner_enforces_origin_binding_before_http_or_dns():
+    def forbidden(): raise AssertionError("No client may be created")
+    report = asyncio.run(runner.run({"module": "nosql", "config": {
+        **NOSQL, "target_origin": "https://only.example.org"}, "target": "https://example.org/",
+        "host": "example.org", "agent": "Test", "delay": 1, "deadline": 75}, factory=forbidden))
+    assert report["status"] == "skipped" and report["requests"] == 0
+
+
+@pytest.mark.parametrize("value", ["https://example.org/private", "https://user:secret@example.org", "//example.org", "https://example.org?secret=value"])
+def test_replay_origin_binding_rejects_non_origin_values(value):
+    with pytest.raises(ValidationError):
+        NoSQLReplay(**NOSQL, target_origin=value)
